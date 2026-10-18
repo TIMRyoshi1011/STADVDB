@@ -1,14 +1,11 @@
-export const MIN = '2024-09-24';
-export const MAX = '2025-09-23';
-
 const filtersToParams = (filters) => {
   const params = new URLSearchParams({
-    from: filters.from,
-    to: filters.to,
     country: filters.country,
     courier: filters.courier,
     vehicle: filters.vehicle,
   });
+  if (filters.from) params.set('from', filters.from);
+  if (filters.to) params.set('to', filters.to);
   filters.cats.forEach((category) => params.append('cats', category));
   return params;
 };
@@ -25,9 +22,6 @@ const request = async (path, params) => {
 };
 
 export const getMeta = () => request('/api/meta', new URLSearchParams());
-
-export const getKpis = (filters) =>
-  request('/api/kpis', filtersToParams(filters));
 
 export const getReport = ({ tab, gb, path, A, locationYear }) => {
   const params = filtersToParams(A);

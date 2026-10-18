@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bar, Doughnut, Line } from 'react-chartjs-2';
 import 'chart.js/auto';
-import { MAX, MIN, getKpis, getMeta, getPivot, getReport } from './api.js';
+import { getMeta, getPivot, getReport } from './api.js';
 import './App.css';
 
 const TABS = [['time', 'Sales Performance'], ['prod', 'Products'], ['loc', 'Customers by Location'], ['log', 'Logistics'], ['pivot', 'Pivot Table']];
@@ -10,7 +10,7 @@ const ROOT = { time: 'All time', prod: 'All categories', loc: 'All countries', l
 const GB = ['Year', 'Quarter', 'Month', 'Day'];
 const PAL = ['#4fd0e8', '#f6c85f', '#6f9ceb', '#ef767a', '#7bd88f', '#c792ea', '#ffa94d', '#5cc8b6', '#b8c0ff', '#e58fb3'];   // one color per bar / slice
 const UP = '#42d9a3', DOWN = '#ff777e';   // line: green = sales went up, red = went down
-const DEF = () => ({ from: MIN, to: MAX, cats: [], country: '', courier: '', vehicle: '' });
+const DEF = (min = '', max = '') => ({ from: min, to: max, cats: [], country: '', courier: '', vehicle: '' });
 const php = (v) => 'Php ' + Math.round(v).toLocaleString('en-PH');
 const lab = (k) => (/^\d{4}-\d\d$/.test(k) ? new Date(k + '-01T00:00').toLocaleString('en', { month: 'short', year: 'numeric' }) : /^\d{4}-\d\d-\d\d$/.test(k) ? new Date(k + 'T00:00').toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' }) : k);
 const fmt = (v) => (v >= 1e6 ? v / 1e6 + 'M' : v >= 1e3 ? v / 1e3 + 'K' : v);
@@ -37,24 +37,32 @@ function App() {
   useEffect(() => {
     let on = true;
     getMeta()
-      .then((result) => on && setMeta(result))
+      .then((result) => {
+        if (!on) return;
+        setMeta(result);
+        setA((filters) => filters.from || filters.to
+          ? filters
+          : { ...filters, from: result.min || '', to: result.max || '' });
+        setD((filters) => filters.from || filters.to
+          ? filters
+          : { ...filters, from: result.min || '', to: result.max || '' });
+      })
       .catch((error) => on && setMetaError({ attempt: tries, message: error.message }));
     return () => { on = false; };
   }, [tries]);
   const params = useMemo(() => ({ tab, gb, path, pivotYear, locationYear, A, tries }), [tab, gb, path, pivotYear, locationYear, A, tries]);
   useEffect(() => {
+    if (!meta) return undefined;
     let on = true;
     const job = params.tab === 'pivot' ? getPivot(params) : getReport(params);
-    const result = ['time', 'prod', 'loc', 'pivot'].includes(params.tab)
-      ? job.then((data) => ({ data, kpi: null }))
-      : Promise.all([job, getKpis(params.A)]).then(([data, kpi]) => ({ data, kpi }));
+    const result = job.then(({ kpi, ...data }) => ({ data, kpi: kpi || null }));
     result
       .then(({ data, kpi }) => on && setRes({ params, data, kpi }))
       .catch((error) => on && setRes({ params, error: error.message }));
     return () => { on = false; };
-  }, [params]);
+  }, [params, meta]);
   const metaErrorMessage = metaError?.attempt === tries ? metaError.message : null;
-  const loading = res.params !== params || (!meta && !metaErrorMessage);
+  const loading = (!meta && !metaErrorMessage) || (meta && res.params !== params);
   const { data, kpi } = res;
   const error = res.error || metaErrorMessage;
   const pivot = tab === 'pivot';
@@ -73,10 +81,10 @@ function App() {
   };
   const apply = (next) => { setA(next); setD(next); setPath([]); };
   const toggleCat = (c) => setD((d) => ({ ...d, cats: d.cats.includes(c) ? d.cats.filter((x) => x !== c) : [...d.cats, c] }));
-  const setF = (k, v) => setD((d) => { const n = { ...d, [k]: v || (k === 'from' ? MIN : k === 'to' ? MAX : '') }; if (n.from > n.to) [n.from, n.to] = [n.to, n.from]; return n; });
+  const setF = (k, v) => setD((d) => { const n = { ...d, [k]: v || (k === 'from' ? meta?.min || '' : k === 'to' ? meta?.max || '' : '') }; if (n.from && n.to && n.from > n.to) [n.from, n.to] = [n.to, n.from]; return n; });
 
   const chips = [];
-  if (!['prod', 'loc', 'pivot'].includes(tab) && (A.from !== MIN || A.to !== MAX)) chips.push([`${lab(A.from)} – ${lab(A.to)}`, { from: MIN, to: MAX }]);
+  if (!['prod', 'loc', 'pivot'].includes(tab) && (A.from !== (meta?.min || '') || A.to !== (meta?.max || ''))) chips.push([`${lab(A.from)} – ${lab(A.to)}`, { from: meta?.min || '', to: meta?.max || '' }]);
   if (!['time', 'loc'].includes(tab)) {
     A.cats.forEach((c) => chips.push([c, { cats: A.cats.filter((x) => x !== c) }]));
     [['country', 'Country'], ['courier', 'Courier'], ['vehicle', 'Vehicle']].forEach(([k, n]) => A[k] && chips.push([`${n}: ${A[k]}`, { [k]: '' }]));
@@ -123,12 +131,12 @@ function App() {
             : <div className="hint">{tab === 'prod' ? 'Choose a category in the chart to see its products and sales.' : tab === 'loc' ? 'Choose a country in the chart or table, then select a year to see its cities.' : 'Select a year to compare quarterly sales by product category.'}</div>
         ) : (
           <div className="row">
-            <div><label>From</label><input type="date" min={MIN} max={MAX} value={D.from} onChange={(e) => setF('from', e.target.value)} /></div>
-            <div><label>To</label><input type="date" min={MIN} max={MAX} value={D.to} onChange={(e) => setF('to', e.target.value)} /></div>
+            <div><label>From</label><input type="date" min={meta?.min || undefined} max={meta?.max || undefined} value={D.from} onChange={(e) => setF('from', e.target.value)} /></div>
+            <div><label>To</label><input type="date" min={meta?.min || undefined} max={meta?.max || undefined} value={D.to} onChange={(e) => setF('to', e.target.value)} /></div>
             {tab !== 'time' && <div><label>Country</label><select value={D.country} onChange={(e) => setF('country', e.target.value)}><option value="">All countries</option>{(meta?.countries ?? []).map((x) => <option key={x}>{x}</option>)}</select></div>}
             {tab !== 'time' && <div><label>Courier</label><select value={D.courier} onChange={(e) => setF('courier', e.target.value)}><option value="">All couriers</option>{(meta?.couriers ?? []).map((x) => <option key={x}>{x}</option>)}</select></div>}
             {tab !== 'time' && <div><label>Vehicle type</label><select value={D.vehicle} onChange={(e) => setF('vehicle', e.target.value)}><option value="">All vehicle types</option>{(meta?.vehicles ?? []).map((x) => <option key={x}>{x}</option>)}</select></div>}
-            <div className="push"><button className="pri" onClick={() => apply(D)}>Apply</button><button onClick={() => apply(DEF())}>Reset</button></div>
+            <div className="push"><button className="pri" onClick={() => apply(D)}>Apply</button><button onClick={() => apply(DEF(meta?.min || '', meta?.max || ''))}>Reset</button></div>
           </div>
         )}
         {!['time', 'prod', 'loc', 'pivot'].includes(tab) && <div className="cats"><span>Categories:</span>{(meta?.cats ?? []).map((c) => <button key={c} className={D.cats.includes(c) ? 'on' : ''} onClick={() => toggleCat(c)}>{c}</button>)}</div>}
@@ -159,7 +167,7 @@ function App() {
             {!loading && error && <><div className="big">⚠️</div>Something went wrong while loading the data: {error}<br /><br /><button className="pri" onClick={() => setTries(tries + 1)}>Try again</button></>}
             {!loading && !error && empty && (['prod', 'loc', 'pivot'].includes(tab)
               ? <><div className="big">🔍</div>{tab === 'prod' ? 'No product sales found.' : tab === 'loc' ? 'No customer locations found.' : 'No years are available for the quarterly sales pivot.'}</>
-              : <><div className="big">🔍</div>No sales match these filters.<br /><br /><button className="pri" onClick={() => apply(DEF())}>Clear all filters</button></>)}
+              : <><div className="big">🔍</div>No sales match these filters.<br /><br /><button className="pri" onClick={() => apply(DEF(meta?.min || '', meta?.max || ''))}>Clear all filters</button></>)}
           </div>
         )}
         {!loading && !error && !empty && (
@@ -196,7 +204,7 @@ function App() {
       </div>
 
       <div className="foot">
-        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL sales and distinct orders; select a country and year to view city quantity totals.' : tab === 'pivot' ? 'Pivot Table uses MySQL quarterly sales totals by product category for the selected year.' : 'This report uses the backend’s in-memory sample dataset.'}</span>
+        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses MySQL sales_amount and quantity totals across the available delivery dates.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL sales and distinct orders; select a country and year to view city quantity totals.' : tab === 'pivot' ? 'Pivot Table uses MySQL quarterly sales totals by product category for the selected year.' : 'Logistics uses MySQL order, date, customer, product, and rider data.'}</span>
         {!loading && res.data && <span>Loaded in {(res.data.ms / 1000).toFixed(2)} s</span>}
       </div>
     </div>
