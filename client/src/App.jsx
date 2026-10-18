@@ -46,7 +46,7 @@ function App() {
   useEffect(() => {
     let on = true;
     const job = params.tab === 'pivot' ? getPivot(params) : getReport(params);
-    const result = ['time', 'prod'].includes(params.tab)
+    const result = ['time', 'prod', 'loc'].includes(params.tab)
       ? job.then((data) => ({ data, kpi: null }))
       : Promise.all([job, getKpis(params.A)]).then(([data, kpi]) => ({ data, kpi }));
     result
@@ -59,7 +59,7 @@ function App() {
   const { data, kpi } = res;
   const error = res.error || metaErrorMessage;
   const pivot = tab === 'pivot';
-  const empty = !loading && !error && (['time', 'prod'].includes(tab) ? !data?.items?.length : kpi.orders === 0);
+  const empty = !loading && !error && (['time', 'prod', 'loc'].includes(tab) ? !data?.items?.length : kpi.orders === 0);
 
   const setTabTo = (t) => {
     setTab(t);
@@ -75,8 +75,8 @@ function App() {
   const setF = (k, v) => setD((d) => { const n = { ...d, [k]: v || (k === 'from' ? MIN : k === 'to' ? MAX : '') }; if (n.from > n.to) [n.from, n.to] = [n.to, n.from]; return n; });
 
   const chips = [];
-  if (tab !== 'prod' && (A.from !== MIN || A.to !== MAX)) chips.push([`${lab(A.from)} – ${lab(A.to)}`, { from: MIN, to: MAX }]);
-  if (tab !== 'time') {
+  if (!['prod', 'loc'].includes(tab) && (A.from !== MIN || A.to !== MAX)) chips.push([`${lab(A.from)} – ${lab(A.to)}`, { from: MIN, to: MAX }]);
+  if (!['time', 'loc'].includes(tab)) {
     A.cats.forEach((c) => chips.push([c, { cats: A.cats.filter((x) => x !== c) }]));
     [['country', 'Country'], ['courier', 'Courier'], ['vehicle', 'Vehicle']].forEach(([k, n]) => A[k] && chips.push([`${n}: ${A[k]}`, { [k]: '' }]));
   }
@@ -118,8 +118,8 @@ function App() {
   return (
     <div className="app">
       <div className="card">
-        {tab === 'prod' ? (
-          <div className="hint">Choose a category in the chart to see its products and sales.</div>
+        {['prod', 'loc'].includes(tab) ? (
+          <div className="hint">{tab === 'prod' ? 'Choose a category in the chart to see its products and sales.' : 'Choose a country in the chart to see its cities and customer sales.'}</div>
         ) : (
           <div className="row">
             <div><label>From</label><input type="date" min={MIN} max={MAX} value={D.from} onChange={(e) => setF('from', e.target.value)} /></div>
@@ -130,15 +130,17 @@ function App() {
             <div className="push"><button className="pri" onClick={() => apply(D)}>Apply</button><button onClick={() => apply(DEF())}>Reset</button></div>
           </div>
         )}
-        {!['time', 'prod'].includes(tab) && <div className="cats"><span>Categories:</span>{(meta?.cats ?? []).map((c) => <button key={c} className={D.cats.includes(c) ? 'on' : ''} onClick={() => toggleCat(c)}>{c}</button>)}</div>}
+        {!['time', 'prod', 'loc'].includes(tab) && <div className="cats"><span>Categories:</span>{(meta?.cats ?? []).map((c) => <button key={c} className={D.cats.includes(c) ? 'on' : ''} onClick={() => toggleCat(c)}>{c}</button>)}</div>}
         {tab === 'time' && <div className="hint">Sales performance uses the database roll-up and filters by delivery date.</div>}
-        {tab !== 'prod' && <div className="chips"><span className="hint">Active filters:</span>{!chips.length && <span className="hint">none – showing everything</span>}
+        {!['prod', 'loc'].includes(tab) && <div className="chips"><span className="hint">Active filters:</span>{!chips.length && <span className="hint">none – showing everything</span>}
           {chips.map(([t, patch]) => <span className="chip" key={t}>{t}<b title="Remove" onClick={() => apply({ ...A, ...patch })}>×</b></span>)}</div>}
       </div>
 
       <div className="kpis">
-        {(['time', 'prod'].includes(tab)
-          ? [[tab === 'prod' ? 'Total sales' : 'Total revenue', data && php(data.totalRevenue), ''], ['Units sold', data && data.totalQuantity.toLocaleString('en-PH'), '']]
+        {(['time', 'prod', 'loc'].includes(tab)
+          ? (tab === 'loc'
+            ? [['Total sales', data && php(data.totalSales), ''], ['Orders', data && data.totalOrders.toLocaleString('en-PH'), '']]
+            : [[tab === 'prod' ? 'Total sales' : 'Total revenue', data && php(data.totalRevenue), ''], ['Units sold', data && data.totalQuantity.toLocaleString('en-PH'), '']])
           : [['Total sales', kpi && php(kpi.sales), ''], ['Orders', kpi && kpi.orders.toLocaleString('en-PH'), ''], ['Items per order', kpi && (kpi.orders ? kpi.perOrder.toFixed(1) : '–'), ''], ['Top courier', kpi && (kpi.top ? kpi.top[0] : '–'), kpi && kpi.top ? php(kpi.top[1]) : '']]).map(([a, b, e]) => (
           <div className="kpi" key={a}><small>{a}</small><div>{b ?? '…'}</div><em>{e || '\u00a0'}</em></div>))}
       </div>
@@ -150,8 +152,8 @@ function App() {
           <div className="state">
             {loading && <><div className="spin" />Loading your numbers…</>}
             {!loading && error && <><div className="big">⚠️</div>Something went wrong while loading the data: {error}<br /><br /><button className="pri" onClick={() => setTries(tries + 1)}>Try again</button></>}
-            {!loading && !error && empty && (tab === 'prod'
-              ? <><div className="big">🔍</div>No product sales found.</>
+            {!loading && !error && empty && (['prod', 'loc'].includes(tab)
+              ? <><div className="big">🔍</div>{tab === 'prod' ? 'No product sales found.' : 'No customer locations found.'}</>
               : <><div className="big">🔍</div>No sales match these filters.<br /><br /><button className="pri" onClick={() => apply(DEF())}>Clear all filters</button></>)}
           </div>
         )}
@@ -168,9 +170,9 @@ function App() {
                   {type === 'line' && <span className="hint"><b className="up">●</b> up from the previous period <b className="down">●</b> down</span>}
                 </div>
                 <div className="ch">{type === 'line' ? <Line data={cdata} options={options} /> : type === 'doughnut' ? <Doughnut data={cdata} options={options} /> : <Bar data={cdata} options={options} />}</div>
-                <div className="sc"><table><thead><tr>{(['time', 'prod'].includes(tab) ? [[ 'k', tab === 'prod' && path.length === 0 ? 'Category' : 'Product / Period'], ['sales', tab === 'prod' ? 'Sales' : 'Revenue'], ['quantity', 'Quantity']] : [['k', 'Item'], ['sales', 'Sales'], ['orders', 'Orders']]).map(([k, n]) => <th key={k} onClick={() => sortBy(k)}>{n}{sort.k === k ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>)}</tr></thead>
+                <div className="sc"><table><thead><tr>{(['time', 'prod'].includes(tab) ? [[ 'k', tab === 'prod' && path.length === 0 ? 'Category' : 'Product / Period'], ['sales', tab === 'prod' ? 'Sales' : 'Revenue'], ['quantity', 'Quantity']] : [['k', tab === 'loc' && path.length === 0 ? 'Country' : tab === 'loc' ? 'City' : 'Item'], ['sales', 'Sales'], ['orders', 'Orders']]).map(([k, n]) => <th key={k} onClick={() => sortBy(k)}>{n}{sort.k === k ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>)}</tr></thead>
                   <tbody>{rows.map((r) => <tr key={r.k}><td>{lab(r.k)}</td><td>{php(r.sales)}</td><td>{(['time', 'prod'].includes(tab) ? r.quantity : r.orders).toLocaleString('en-PH')}</td></tr>)}</tbody></table></div>
-                <button onClick={() => download(tab + '.csv', ['time', 'prod'].includes(tab) ? [tab === 'prod' && path.length === 0 ? 'Category' : 'Product / Period', tab === 'prod' ? 'Sales (Php)' : 'Revenue (Php)', 'Quantity'] : ['Item', 'Sales (Php)', 'Orders'], csvRows)}>Export CSV</button>
+                <button onClick={() => download(tab + '.csv', ['time', 'prod'].includes(tab) ? [tab === 'prod' && path.length === 0 ? 'Category' : 'Product / Period', tab === 'prod' ? 'Sales (Php)' : 'Revenue (Php)', 'Quantity'] : [tab === 'loc' && path.length === 0 ? 'Country' : tab === 'loc' ? 'City' : 'Item', 'Sales (Php)', 'Orders'], csvRows)}>Export CSV</button>
               </>
             )}
             {pivot && (
@@ -192,7 +194,7 @@ function App() {
       </div>
 
       <div className="foot">
-        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : 'This report uses the backend’s in-memory sample dataset.'}</span>
+        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL distinct order counts and sales, drilled down from country to city.' : 'This report uses the backend’s in-memory sample dataset.'}</span>
         {!loading && res.data && <span>Loaded in {(res.data.ms / 1000).toFixed(2)} s</span>}
       </div>
     </div>

@@ -208,6 +208,25 @@ const PRODUCT_DRILLDOWN_SQL = `
       p.category,
       total_sales DESC
 `;
+const LOCATION_DRILLDOWN_SQL = `
+  SELECT
+      u.country,
+      u.city,
+      COUNT(DISTINCT oi.source_order_id) AS total_orders,
+      SUM(oi.sales_amount) AS total_sales
+  FROM OrderItem oi
+  JOIN \`User\` u ON oi.user_id = u.user_id
+  WHERE
+      (? IS NULL OR u.country = ?)
+      AND
+      (? IS NULL OR u.city = ?)
+  GROUP BY
+      u.country,
+      u.city
+  ORDER BY
+      u.country,
+      total_sales DESC
+`;
 const productRowsCache = new Map();
 const getProductRows = (category, product) => {
   const key = JSON.stringify([category, product]);
@@ -231,6 +250,32 @@ const getProductRows = (category, product) => {
   productRowsCache.set(key, entry);
   if (productRowsCache.size > 20) {
     productRowsCache.delete(productRowsCache.keys().next().value);
+  }
+  return entry.promise;
+};
+const locationRowsCache = new Map();
+const getLocationRows = (country, city) => {
+  const key = JSON.stringify([country, city]);
+  const cached = locationRowsCache.get(key);
+  if (cached && (!cached.expiresAt || cached.expiresAt > Date.now())) {
+    return cached.promise;
+  }
+
+  const entry = {};
+  entry.promise = pool.execute(LOCATION_DRILLDOWN_SQL, [
+    country, country, city, city,
+  ])
+    .then(([rows]) => {
+      entry.expiresAt = Date.now() + 60_000;
+      return rows;
+    })
+    .catch((error) => {
+      locationRowsCache.delete(key);
+      throw error;
+    });
+  locationRowsCache.set(key, entry);
+  if (locationRowsCache.size > 20) {
+    locationRowsCache.delete(locationRowsCache.keys().next().value);
   }
   return entry.promise;
 };
@@ -360,6 +405,41 @@ const getProductReport = async (path) => {
     totalQuantity: products.reduce((sum, row) => sum + row.quantity, 0),
   };
 };
+const getLocationReport = async (path) => {
+  const country = path[0] ?? null;
+  const city = path[1] ?? null;
+  const rows = await getLocationRows(country, city);
+  const locations = rows.map((row) => ({
+    country: row.country ?? '(Unknown country)',
+    city: row.city ?? '(Unknown city)',
+    sales: Number(row.total_sales || 0),
+    orders: Number(row.total_orders || 0),
+  }));
+  const visibleRows = path.length === 0
+    ? [...locations.reduce((groups, row) => {
+      const group = groups.get(row.country) || {
+        k: row.country,
+        sales: 0,
+        orders: 0,
+      };
+      group.sales += row.sales;
+      group.orders += row.orders;
+      groups.set(row.country, group);
+      return groups;
+    }, new Map()).values()]
+    : locations.map((row) => ({
+      ...row,
+      k: row.city,
+    }));
+
+  return {
+    items: visibleRows,
+    can: path.length < 2,
+    level: path.length,
+    totalSales: locations.reduce((sum, row) => sum + row.sales, 0),
+    totalOrders: locations.reduce((sum, row) => sum + row.orders, 0),
+  };
+};
 
 app.get("/api/conn", async (req, res) => {
     try {
@@ -421,6 +501,22 @@ app.get('/api/report', async (req, res) => {
   }
 
   const startedAt = performance.now();
+  if (tab === 'loc') {
+    if (path.length > 2) {
+      res.status(400).json({ error: 'The selected location drill-down is too deep.' });
+      return;
+    }
+
+    try {
+      const report = await getLocationReport(path);
+      res.json({ ...report, ms: elapsed(startedAt) });
+    } catch (error) {
+      console.error('Customer location query failed:', error.message);
+      res.status(500).json({ error: 'Failed to load customer locations from the database.' });
+    }
+    return;
+  }
+
   if (tab === 'prod') {
     if (path.length > 2) {
       res.status(400).json({ error: 'The selected product drill-down is too deep.' });
