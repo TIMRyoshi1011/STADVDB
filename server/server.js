@@ -1,19 +1,21 @@
 import express from 'express';
+import cors from 'cors';
 import mysql from "mysql2/promise";
+import 'dotenv/config';
 
 const pool = mysql.createPool({
-    host: "localhost",
-    user: "root",
-    password: "TheMarcHunter#1011",         // change to mysql password
-    database: "ecomm_dw",
-    port: 3306,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
+    host: process.env.HOST,
+    user: process.env.USER,
+    password: process.env.PASSWORD,         // change to mysql password
+    database: process.env.DB,
+    port: process.env.DB_PORT
 });
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(cors()); // Allow requests from your frontend
+app.use(express.json());
+
+const PORT = process.env.PORT;
 const MIN = '2024-09-24';
 const MAX = '2025-09-23';
 const CATS = {
