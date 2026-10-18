@@ -37,9 +37,8 @@ export const getReport = ({ tab, gb, path, A }) => {
   return request('/api/report', params);
 };
 
-export const getPivot = ({ pr, pc, A }) => {
-  const params = filtersToParams(A);
-  params.set('pr', pr);
-  params.set('pc', pc);
+export const getPivot = ({ pivotYear }) => {
+  const params = new URLSearchParams();
+  if (pivotYear) params.set('year', pivotYear);
   return request('/api/pivot', params);
 };

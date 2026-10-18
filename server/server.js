@@ -52,7 +52,6 @@ const DIMS = {
   loc: ['country', 'city'],
   log: ['courier', 'rider'],
 };
-const PIVOT_DIMS = ['cat', 'quarter', 'month', 'courier', 'vehicle', 'country'];
 
 let seed = 7;
 const rnd = () => {
@@ -109,14 +108,6 @@ const timeKey = (date, level) => (
         ? date.slice(0, 7)
         : date
 );
-const dimensionKey = (row, dimension) => (
-  dimension === 'quarter'
-    ? timeKey(row.d, 1)
-    : dimension === 'month'
-      ? timeKey(row.d, 2)
-      : row[dimension]
-);
-
 const queryString = (value, fallback = '') => (
   typeof value === 'string' ? value : fallback
 );
@@ -227,6 +218,23 @@ const LOCATION_DRILLDOWN_SQL = `
       u.country,
       total_sales DESC
 `;
+const QUARTERLY_CATEGORY_PIVOT_SQL = `
+  SELECT
+      p.category,
+      SUM(CASE WHEN d.quarter = 1 THEN oi.sales_amount ELSE 0 END) AS Q1_sales,
+      SUM(CASE WHEN d.quarter = 2 THEN oi.sales_amount ELSE 0 END) AS Q2_sales,
+      SUM(CASE WHEN d.quarter = 3 THEN oi.sales_amount ELSE 0 END) AS Q3_sales,
+      SUM(CASE WHEN d.quarter = 4 THEN oi.sales_amount ELSE 0 END) AS Q4_sales,
+      SUM(oi.sales_amount) AS annual_sales
+  FROM OrderItem oi
+  JOIN Product p
+      ON oi.product_id = p.product_id
+  JOIN \`Date\` d
+      ON oi.delivery_date_id = d.date_id
+  WHERE d.year = ?
+  GROUP BY p.category
+  ORDER BY annual_sales DESC
+`;
 const productRowsCache = new Map();
 const getProductRows = (category, product) => {
   const key = JSON.stringify([category, product]);
@@ -276,6 +284,62 @@ const getLocationRows = (country, city) => {
   locationRowsCache.set(key, entry);
   if (locationRowsCache.size > 20) {
     locationRowsCache.delete(locationRowsCache.keys().next().value);
+  }
+  return entry.promise;
+};
+let pivotYearsCache;
+const getPivotYears = async () => {
+  if (pivotYearsCache && pivotYearsCache.expiresAt > Date.now()) {
+    return pivotYearsCache.years;
+  }
+  const [rows] = await pool.query(
+    'SELECT DISTINCT year FROM `Date` WHERE year IS NOT NULL ORDER BY year',
+  );
+  pivotYearsCache = {
+    years: rows.map(({ year }) => Number(year)),
+    expiresAt: Date.now() + 60_000,
+  };
+  return pivotYearsCache.years;
+};
+const quarterlyPivotCache = new Map();
+const getQuarterlyCategoryPivot = async (requestedYear) => {
+  const years = await getPivotYears();
+  const defaultYear = years.filter((value) => value <= Number(MAX.slice(0, 4))).at(-1)
+    ?? years.at(-1);
+  const year = requestedYear ?? defaultYear;
+  if (year == null || !years.includes(year)) {
+    return { year, years, items: [], totalSales: 0 };
+  }
+
+  let entry = quarterlyPivotCache.get(year);
+  if (!entry || (entry.expiresAt && entry.expiresAt <= Date.now())) {
+    entry = {};
+    entry.promise = pool.execute(QUARTERLY_CATEGORY_PIVOT_SQL, [year])
+      .then(([rows]) => {
+        entry.expiresAt = Date.now() + 60_000;
+        const items = rows.map((row) => ({
+          category: row.category,
+          q1: Number(row.Q1_sales || 0),
+          q2: Number(row.Q2_sales || 0),
+          q3: Number(row.Q3_sales || 0),
+          q4: Number(row.Q4_sales || 0),
+          annual: Number(row.annual_sales || 0),
+        }));
+        return {
+          year,
+          years,
+          items,
+          totalSales: items.reduce((sum, item) => sum + item.annual, 0),
+        };
+      })
+      .catch((error) => {
+        quarterlyPivotCache.delete(year);
+        throw error;
+      });
+    quarterlyPivotCache.set(year, entry);
+    if (quarterlyPivotCache.size > 5) {
+      quarterlyPivotCache.delete(quarterlyPivotCache.keys().next().value);
+    }
   }
   return entry.promise;
 };
@@ -573,60 +637,27 @@ app.get('/api/report', async (req, res) => {
   });
 });
 
-app.get('/api/pivot', (req, res) => {
-  const filters = getFilters(req.query);
-  const rowDimension = queryString(req.query.pr);
-  const columnDimension = queryString(req.query.pc);
-
-  if (!validateFilters(filters, res)) return;
-  if (!PIVOT_DIMS.includes(rowDimension) || !PIVOT_DIMS.includes(columnDimension)) {
-    res.status(400).json({ error: 'Choose valid pivot table groupings.' });
+app.get('/api/pivot', async (req, res) => {
+  const requestedYearText = queryString(req.query.year);
+  const requestedYear = requestedYearText ? Number(requestedYearText) : null;
+  if (requestedYearText && (!/^\d{4}$/.test(requestedYearText) || !Number.isInteger(requestedYear))) {
+    res.status(400).json({ error: 'Choose a valid four-digit year.' });
     return;
   }
 
   const startedAt = performance.now();
-  const filteredRows = filterRows(filters);
-  const topKeys = (dimension) => {
-    const totals = {};
-    filteredRows.forEach((row) => {
-      const key = dimensionKey(row, dimension);
-      totals[key] = (totals[key] || 0) + row.sales;
-    });
-    return new Set(
-      Object.keys(totals)
-        .sort((a, b) => totals[b] - totals[a])
-        .slice(0, 10),
-    );
-  };
-  const topRows = topKeys(rowDimension);
-  const topColumns = topKeys(columnDimension);
-  const matrix = {};
-  const columns = new Set();
-
-  filteredRows.forEach((row) => {
-    const rawRow = dimensionKey(row, rowDimension);
-    const rawColumn = dimensionKey(row, columnDimension);
-    const rowKey = topRows.has(rawRow) ? rawRow : 'Others';
-    const columnKey = topColumns.has(rawColumn) ? rawColumn : 'Others';
-    columns.add(columnKey);
-    matrix[rowKey] = matrix[rowKey] || {};
-    matrix[rowKey][columnKey] = (matrix[rowKey][columnKey] || 0) + row.sales;
-  });
-
-  const rowTotal = (key) => Object.values(matrix[key]).reduce((sum, value) => sum + value, 0);
-  const columnLabels = [...columns].sort(
-    (a, b) => (a === 'Others') - (b === 'Others') || (a < b ? -1 : 1),
-  );
-  const rowLabels = Object.keys(matrix).sort(
-    (a, b) => (a === 'Others') - (b === 'Others') || rowTotal(b) - rowTotal(a),
-  );
-
-  res.json({
-    rowLabels,
-    colLabels: columnLabels,
-    cells: rowLabels.map((row) => columnLabels.map((column) => matrix[row][column] || 0)),
-    ms: elapsed(startedAt),
-  });
+  try {
+    const years = await getPivotYears();
+    if (requestedYear != null && !years.includes(requestedYear)) {
+      res.status(400).json({ error: 'Choose a year available in the Date table.' });
+      return;
+    }
+    const pivot = await getQuarterlyCategoryPivot(requestedYear);
+    res.json({ ...pivot, ms: elapsed(startedAt) });
+  } catch (error) {
+    console.error('Quarterly category pivot query failed:', error.message);
+    res.status(500).json({ error: 'Failed to load quarterly category sales from the database.' });
+  }
 });
 
 app.listen(PORT, () => {

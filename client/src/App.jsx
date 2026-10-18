@@ -5,9 +5,8 @@ import { MAX, MIN, getKpis, getMeta, getPivot, getReport } from './api.js';
 import './App.css';
 
 const TABS = [['time', 'Sales Performance'], ['prod', 'Products'], ['loc', 'Customers by Location'], ['log', 'Logistics'], ['pivot', 'Pivot Table']];
-const TITLE = { time: 'How are sales changing over time?', prod: 'Which products sell best?', loc: 'Where are our customers?', log: 'How are deliveries performing?', pivot: 'Compare two things side by side' };
+const TITLE = { time: 'How are sales changing over time?', prod: 'Which products sell best?', loc: 'Where are our customers?', log: 'How are deliveries performing?', pivot: 'Quarterly sales by product category' };
 const ROOT = { time: 'All time', prod: 'All categories', loc: 'All countries', log: 'All couriers' };
-const PD = { cat: 'Category', quarter: 'Quarter', month: 'Month', courier: 'Courier', vehicle: 'Vehicle type', country: 'Country' };
 const GB = ['Year', 'Quarter', 'Month', 'Day'];
 const PAL = ['#4fd0e8', '#f6c85f', '#6f9ceb', '#ef767a', '#7bd88f', '#c792ea', '#ffa94d', '#5cc8b6', '#b8c0ff', '#e58fb3'];   // one color per bar / slice
 const UP = '#42d9a3', DOWN = '#ff777e';   // line: green = sales went up, red = went down
@@ -27,8 +26,7 @@ function App() {
   const [path, setPath] = useState([]);
   const [A, setA] = useState(DEF());   // applied filters
   const [D, setD] = useState(DEF());   // filters being edited (applied with the Apply button)
-  const [pr, setPr] = useState('cat');
-  const [pc, setPc] = useState('quarter');
+  const [pivotYear, setPivotYear] = useState('');
   const [sort, setSort] = useState(defSort('time'));
   const [tries, setTries] = useState(0);
   const [res, setRes] = useState({ params: null });
@@ -42,11 +40,11 @@ function App() {
       .catch((error) => on && setMetaError({ attempt: tries, message: error.message }));
     return () => { on = false; };
   }, [tries]);
-  const params = useMemo(() => ({ tab, gb, path, pr, pc, A, tries }), [tab, gb, path, pr, pc, A, tries]);
+  const params = useMemo(() => ({ tab, gb, path, pivotYear, A, tries }), [tab, gb, path, pivotYear, A, tries]);
   useEffect(() => {
     let on = true;
     const job = params.tab === 'pivot' ? getPivot(params) : getReport(params);
-    const result = ['time', 'prod', 'loc'].includes(params.tab)
+    const result = ['time', 'prod', 'loc', 'pivot'].includes(params.tab)
       ? job.then((data) => ({ data, kpi: null }))
       : Promise.all([job, getKpis(params.A)]).then(([data, kpi]) => ({ data, kpi }));
     result
@@ -59,7 +57,9 @@ function App() {
   const { data, kpi } = res;
   const error = res.error || metaErrorMessage;
   const pivot = tab === 'pivot';
-  const empty = !loading && !error && (['time', 'prod', 'loc'].includes(tab) ? !data?.items?.length : kpi.orders === 0);
+  const empty = !loading && !error && (tab === 'pivot'
+    ? !data?.years?.length
+    : ['time', 'prod', 'loc'].includes(tab) ? !data?.items?.length : kpi.orders === 0);
 
   const setTabTo = (t) => {
     setTab(t);
@@ -75,7 +75,7 @@ function App() {
   const setF = (k, v) => setD((d) => { const n = { ...d, [k]: v || (k === 'from' ? MIN : k === 'to' ? MAX : '') }; if (n.from > n.to) [n.from, n.to] = [n.to, n.from]; return n; });
 
   const chips = [];
-  if (!['prod', 'loc'].includes(tab) && (A.from !== MIN || A.to !== MAX)) chips.push([`${lab(A.from)} – ${lab(A.to)}`, { from: MIN, to: MAX }]);
+  if (!['prod', 'loc', 'pivot'].includes(tab) && (A.from !== MIN || A.to !== MAX)) chips.push([`${lab(A.from)} – ${lab(A.to)}`, { from: MIN, to: MAX }]);
   if (!['time', 'loc'].includes(tab)) {
     A.cats.forEach((c) => chips.push([c, { cats: A.cats.filter((x) => x !== c) }]));
     [['country', 'Country'], ['courier', 'Courier'], ['vehicle', 'Vehicle']].forEach(([k, n]) => A[k] && chips.push([`${n}: ${A[k]}`, { [k]: '' }]));
@@ -111,15 +111,13 @@ function App() {
     segment: type === 'line' ? { borderColor: (c) => (c.p1.parsed.y >= c.p0.parsed.y ? UP : DOWN) } : undefined,
     pointBackgroundColor: vals.map((_, i) => (up(i) ? UP : DOWN)), pointRadius: tab === 'time' ? 5 : 0, pointHoverRadius: 8, tension: 0.3 }] };
   const crumbs = [tab === 'time' ? 'Selected dates' : ROOT[tab], ...path.map(lab)];
-  const max = pivot && data && data.cells ? Math.max(1, ...data.cells.flat()) : 1;   // data can still be the previous tab's result while loading
-  const pcell = (v) => (v ? { background: `rgba(0,153,184,${(0.12 + (0.8 * v) / max).toFixed(2)})` } : undefined);
   const sortBy = (k) => setSort({ k, dir: sort.k === k ? -sort.dir : k === 'k' ? 1 : -1 });
 
   return (
     <div className="app">
       <div className="card">
-        {['prod', 'loc'].includes(tab) ? (
-          <div className="hint">{tab === 'prod' ? 'Choose a category in the chart to see its products and sales.' : 'Choose a country in the chart to see its cities and customer sales.'}</div>
+        {['prod', 'loc', 'pivot'].includes(tab) ? (
+          <div className="hint">{tab === 'prod' ? 'Choose a category in the chart to see its products and sales.' : tab === 'loc' ? 'Choose a country in the chart to see its cities and customer sales.' : 'Select a year to compare quarterly sales by product category.'}</div>
         ) : (
           <div className="row">
             <div><label>From</label><input type="date" min={MIN} max={MAX} value={D.from} onChange={(e) => setF('from', e.target.value)} /></div>
@@ -130,15 +128,17 @@ function App() {
             <div className="push"><button className="pri" onClick={() => apply(D)}>Apply</button><button onClick={() => apply(DEF())}>Reset</button></div>
           </div>
         )}
-        {!['time', 'prod', 'loc'].includes(tab) && <div className="cats"><span>Categories:</span>{(meta?.cats ?? []).map((c) => <button key={c} className={D.cats.includes(c) ? 'on' : ''} onClick={() => toggleCat(c)}>{c}</button>)}</div>}
+        {!['time', 'prod', 'loc', 'pivot'].includes(tab) && <div className="cats"><span>Categories:</span>{(meta?.cats ?? []).map((c) => <button key={c} className={D.cats.includes(c) ? 'on' : ''} onClick={() => toggleCat(c)}>{c}</button>)}</div>}
         {tab === 'time' && <div className="hint">Sales performance uses the database roll-up and filters by delivery date.</div>}
-        {!['prod', 'loc'].includes(tab) && <div className="chips"><span className="hint">Active filters:</span>{!chips.length && <span className="hint">none – showing everything</span>}
+        {!['prod', 'loc', 'pivot'].includes(tab) && <div className="chips"><span className="hint">Active filters:</span>{!chips.length && <span className="hint">none – showing everything</span>}
           {chips.map(([t, patch]) => <span className="chip" key={t}>{t}<b title="Remove" onClick={() => apply({ ...A, ...patch })}>×</b></span>)}</div>}
       </div>
 
       <div className="kpis">
-        {(['time', 'prod', 'loc'].includes(tab)
-          ? (tab === 'loc'
+        {(['time', 'prod', 'loc', 'pivot'].includes(tab)
+          ? (tab === 'pivot'
+            ? [['Annual sales', data && php(data.totalSales), ''], ['Product categories', data && data.items.length.toLocaleString('en-PH'), '']]
+            : tab === 'loc'
             ? [['Total sales', data && php(data.totalSales), ''], ['Orders', data && data.totalOrders.toLocaleString('en-PH'), '']]
             : [[tab === 'prod' ? 'Total sales' : 'Total revenue', data && php(data.totalRevenue), ''], ['Units sold', data && data.totalQuantity.toLocaleString('en-PH'), '']])
           : [['Total sales', kpi && php(kpi.sales), ''], ['Orders', kpi && kpi.orders.toLocaleString('en-PH'), ''], ['Items per order', kpi && (kpi.orders ? kpi.perOrder.toFixed(1) : '–'), ''], ['Top courier', kpi && (kpi.top ? kpi.top[0] : '–'), kpi && kpi.top ? php(kpi.top[1]) : '']]).map(([a, b, e]) => (
@@ -152,8 +152,8 @@ function App() {
           <div className="state">
             {loading && <><div className="spin" />Loading your numbers…</>}
             {!loading && error && <><div className="big">⚠️</div>Something went wrong while loading the data: {error}<br /><br /><button className="pri" onClick={() => setTries(tries + 1)}>Try again</button></>}
-            {!loading && !error && empty && (['prod', 'loc'].includes(tab)
-              ? <><div className="big">🔍</div>{tab === 'prod' ? 'No product sales found.' : 'No customer locations found.'}</>
+            {!loading && !error && empty && (['prod', 'loc', 'pivot'].includes(tab)
+              ? <><div className="big">🔍</div>{tab === 'prod' ? 'No product sales found.' : tab === 'loc' ? 'No customer locations found.' : 'No years are available for the quarterly sales pivot.'}</>
               : <><div className="big">🔍</div>No sales match these filters.<br /><br /><button className="pri" onClick={() => apply(DEF())}>Clear all filters</button></>)}
           </div>
         )}
@@ -178,15 +178,12 @@ function App() {
             {pivot && (
               <>
                 <div className="row">
-                  <div><label>Rows</label><select value={pr} onChange={(e) => setPr(e.target.value)}>{Object.entries(PD).map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select></div>
-                  <div><label>Columns</label><select value={pc} onChange={(e) => setPc(e.target.value)}>{Object.entries(PD).map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select></div>
-                  <button onClick={() => { setPr(pc); setPc(pr); }}>Swap rows and columns</button>
+                  <div><label>Year</label><select value={pivotYear || data.year} onChange={(e) => setPivotYear(e.target.value)}>{data.years.map((year) => <option key={year} value={year}>{year}</option>)}</select></div>
                 </div>
-                {pr === pc ? <p className="hint">Please pick two different groupings.</p> : (
-                  <div className="sc"><table className="pv"><thead><tr><th>{PD[pr]} / {PD[pc]}</th>{data.colLabels.map((c) => <th key={c}>{lab(c)}</th>)}</tr></thead>
-                    <tbody>{data.rowLabels.map((r, i) => <tr key={r}><td>{r}</td>{data.cells[i].map((v, j) => <td key={j} style={pcell(v)}>{v ? php(v) : '–'}</td>)}</tr>)}</tbody></table></div>
-                )}
-                {pr !== pc && <button onClick={() => download('pivot.csv', [PD[pr], ...data.colLabels.map(lab)], data.rowLabels.map((r, i) => [r, ...data.cells[i].map(Math.round)]))}>Export CSV</button>}
+                {!data.items.length && <p className="hint">No category sales found for {data.year}.</p>}
+                <div className="sc"><table className="pv"><thead><tr><th>Category</th><th>Q1 sales</th><th>Q2 sales</th><th>Q3 sales</th><th>Q4 sales</th><th>Annual sales</th></tr></thead>
+                  <tbody>{data.items.map((row) => <tr key={row.category}><td>{row.category}</td><td>{php(row.q1)}</td><td>{php(row.q2)}</td><td>{php(row.q3)}</td><td>{php(row.q4)}</td><td>{php(row.annual)}</td></tr>)}</tbody></table></div>
+                <button onClick={() => download(`quarterly-sales-${data.year}.csv`, ['Category', 'Q1 sales (Php)', 'Q2 sales (Php)', 'Q3 sales (Php)', 'Q4 sales (Php)', 'Annual sales (Php)'], data.items.map((row) => [row.category, row.q1, row.q2, row.q3, row.q4, row.annual]))}>Export CSV</button>
               </>
             )}
           </div>
@@ -194,7 +191,7 @@ function App() {
       </div>
 
       <div className="foot">
-        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL distinct order counts and sales, drilled down from country to city.' : 'This report uses the backend’s in-memory sample dataset.'}</span>
+        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL distinct order counts and sales, drilled down from country to city.' : tab === 'pivot' ? 'Pivot Table uses MySQL quarterly sales totals by product category for the selected year.' : 'This report uses the backend’s in-memory sample dataset.'}</span>
         {!loading && res.data && <span>Loaded in {(res.data.ms / 1000).toFixed(2)} s</span>}
       </div>
     </div>
