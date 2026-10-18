@@ -20,6 +20,7 @@
   },
   "homepage": "https://github.com/TIMRyoshi1011/STADVDB#readme",
   "dependencies": {
-    "concurrently": "^10.0.6"
+    "concurrently": "^10.0.6",
+    "mysql2": "^3.24.6"
   }
 }

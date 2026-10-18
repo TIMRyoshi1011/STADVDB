@@ -1,4 +1,5 @@
 import express from "express";
+import pool from "./conn.js";
 
 const app = express();
 const PORT = 3000;
@@ -6,6 +7,23 @@ const periods = new Set(["Year", "Quarter", "Month", "Day"]);
 
 app.get("/", (req, res) => {
     res.send("Hello, World!");
+});
+
+app.get("/api/conn", async (req, res) => {
+    try {
+        const [rows] = await pool.query("SELECT 1 AS connected");
+
+        res.json({
+            message: "MySQL connected successfully!",
+            result: rows[0],
+        });
+    } catch (error) {
+        console.error("MySQL connection error:", error.message);
+
+        res.status(500).json({
+            error: "Database connection failed",
+        });
+    }
 });
 
 app.get("/api/dashboard", (req, res) => {
