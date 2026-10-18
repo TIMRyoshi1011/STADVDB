@@ -1,16 +1,18 @@
-# React + Vite
+# STADVDB OLAP Application
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Note: server is working, run on main terminal
 
-Currently, two official plugins are available:
+Instructions
+- Go to client folder: `cd client`
+- Install dependencies (on client folder): `npm i chart.js react-chartjs-2`
+- Go back to main: `cd ..`
+- Go to server folder: `cd server`
+- Install dependencies (on server folder): `npm install express mysql2`
+- Go back to main: `cd ..`
+- Install dependencies (on main folder): `npm i concurrently`
+- Run: `npm run dev`
+- Open `http://localhost:3000/api/conn`, `http://localhost:3000/api/dashboard` and `http://localhost:5173/` in browser
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+The Vite development server proxies `/api` requests to Express at
+`http://localhost:3000`. The dashboard loads its summary and chart data from
+`GET /api/dashboard?period=Month`
