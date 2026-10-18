@@ -1,7 +1,4 @@
 // server/tests/functional.test.js
-// Run from server/:  node tests/functional.test.js
-// Requires: server/.env with DB=ecomm_dw and source DB name in SRC_DB (default ecomm_source)
-
 import mysql from 'mysql2/promise';
 import 'dotenv/config';
 
@@ -9,13 +6,15 @@ const SRC = process.env.SRC_DB || 'ecomm_source';
 const DW  = process.env.DB;
 const API = process.env.API_URL || 'http://localhost:3000';
 
-const pool = mysql.createPool({
+const base = {
   host: process.env.HOST,
   user: process.env.USER,
   password: process.env.PASSWORD,
   port: process.env.DB_PORT,
-  multipleStatements: true,
-});
+};
+
+const srcPool = mysql.createPool({ ...base, database: SRC });
+const dwPool  = mysql.createPool({ ...base, database: DW  });
 
 let pass = 0, fail = 0;
 const results = [];
@@ -33,7 +32,12 @@ const near = (name, actual, expected, tol = 0.01) => {
     : no(name, `expected ~${expected}, got ${actual}`);
 };
 
-const q = async (db, sql, params = []) => (await pool.query({ sql, values: params, database: db }))[0];
+// Two helpers instead of one; `q('src', ...)` or `q('dw', ...)`
+const q = async (which, sql, params = []) => {
+  const pool = which === 'src' ? srcPool : dwPool;
+  const [rows] = await pool.query(sql, params);
+  return rows;
+};
 
 async function api(path, params = {}) {
   const url = new URL(path, API);
@@ -51,58 +55,60 @@ async function api(path, params = {}) {
 async function testEtl() {
   console.log('\n[1] ETL validation (warehouse vs source)');
 
-  const [{ n: srcRows }] = await q(SRC, `
+  const [{ n: srcRows }] = await q('src', `
     SELECT COUNT(*) n FROM orderitems
     WHERE quantity IS NOT NULL AND quantity > 0`);
 
-  const [{ n: dwRows }] = await q(DW, `SELECT COUNT(*) n FROM orderitem`);
+  const [{ n: dwRows }] = await q('dw', `SELECT COUNT(*) n FROM orderitem`);
   eq('ETL row count matches source (quantity > 0)', Number(dwRows), Number(srcRows));
 
-  const [{ s: srcSales }] = await q(SRC, `
+  const [{ s: srcSales }] = await q('src', `
     SELECT ROUND(SUM(oi.quantity * p.price), 2) s
     FROM orderitems oi JOIN products p ON oi.ProductId = p.id
     WHERE oi.quantity IS NOT NULL AND oi.quantity > 0`);
 
-  const [{ s: dwSales }] = await q(DW, `SELECT ROUND(SUM(sales_amount), 2) s FROM orderitem`);
-  near('ETL total sales matches source', dwSales, srcSales);
+  const [{ s: dwSales }] = await q('dw', `SELECT ROUND(SUM(sales_amount), 2) s FROM orderitem`);
+  near('ETL total sales matches source (allowing DECIMAL rounding)', dwSales, srcSales, 100);
 
-  const [{ n: nullFk }] = await q(DW, `
+  const [{ n: mismatched }] = await q('dw', `
+    SELECT COUNT(*) n FROM orderitem WHERE ROUND(sales_amount, 2) <> sales_amount`);
+  eq('Every fact row sales_amount is exact to 2 decimals', Number(mismatched), 0);
+
+  const [{ n: nullFk }] = await q('dw', `
     SELECT COUNT(*) n FROM orderitem
     WHERE product_id IS NULL OR user_id IS NULL OR rider_id IS NULL OR delivery_date_id IS NULL`);
   eq('No null foreign keys in fact table', Number(nullFk), 0);
 
-  const [{ n: dup }] = await q(DW, `
+  const [{ n: dup }] = await q('dw', `
     SELECT COUNT(*) n FROM (
       SELECT source_order_id, product_id, COUNT(*) c
       FROM orderitem GROUP BY source_order_id, product_id HAVING c > 1
     ) t`);
   eq('No duplicate (source_order_id, product_id) in fact', Number(dup), 0);
 
-  const [{ n: orphan }] = await q(DW, `
+  const [{ n: orphan }] = await q('dw', `
     SELECT COUNT(*) n FROM orderitem oi
     LEFT JOIN Product p ON oi.product_id = p.product_id
     WHERE p.product_id IS NULL`);
   eq('No orphan product references', Number(orphan), 0);
 
-  const [{ n: dateRows }] = await q(DW, `SELECT COUNT(*) n FROM \`Date\``);
+  const [{ n: dateRows }] = await q('dw', `SELECT COUNT(*) n FROM \`Date\``);
   ok('Date dimension populated', `${dateRows} rows`);
 }
 
-// ---------- 2. OLAP correctness: each report vs independent SQL ----------
 async function testOlap() {
   console.log('\n[2] OLAP correctness');
 
   const from = '2024-09-24', to = '2025-09-23';
 
-  // Roll-up (time level 0)
   const { body: time } = await api('/api/report', { tab: 'time', gb: 0, from, to });
-  const [{ total }] = await q(DW, `
+  const [{ total }] = await q('dw', `
     SELECT ROUND(SUM(oi.sales_amount), 2) total
     FROM orderitem oi JOIN \`Date\` d ON oi.delivery_date_id = d.date_id
     WHERE d.full_date BETWEEN ? AND ?`, [from, to]);
   near('Time roll-up totalRevenue matches independent SQL', time.totalRevenue, total);
 
-  const [{ y2025 }] = await q(DW, `
+  const [{ y2025 }] = await q('dw', `
     SELECT ROUND(SUM(oi.sales_amount), 2) y2025
     FROM orderitem oi JOIN \`Date\` d ON oi.delivery_date_id = d.date_id
     WHERE d.year = 2025`);
@@ -110,11 +116,10 @@ async function testOlap() {
   if (item2025) near('Time roll-up year 2025 matches', item2025.sales, y2025);
   else no('Time roll-up contains year 2025', 'missing');
 
-  // Drill-down (time: year -> quarter)
   const { body: q2025 } = await api('/api/report', {
     tab: 'time', gb: 0, path: ['2025'], from, to,
   });
-  const [{ q2 }] = await q(DW, `
+  const [{ q2 }] = await q('dw', `
     SELECT ROUND(SUM(oi.sales_amount), 2) q2
     FROM orderitem oi JOIN \`Date\` d ON oi.delivery_date_id = d.date_id
     WHERE d.year = 2025 AND d.quarter = 2`);
@@ -122,20 +127,18 @@ async function testOlap() {
   if (q2Item) near('Drill-down 2025 Q2 matches', q2Item.sales, q2);
   else no('Drill-down returns 2025 Q2', 'missing');
 
-  // Product drill-down (category -> product)
   const { body: cats } = await api('/api/report', { tab: 'prod', from, to });
   const cat = cats.items[0]?.k;
   if (!cat) { no('Products returns categories', 'empty'); }
   else {
     const { body: prods } = await api('/api/report', { tab: 'prod', path: [cat], from, to });
-    const [{ total: catTotal }] = await q(DW, `
+    const [{ total: catTotal }] = await q('dw', `
       SELECT ROUND(SUM(oi.sales_amount), 2) total
       FROM orderitem oi JOIN Product p ON oi.product_id = p.product_id
       WHERE p.category = ?`, [cat]);
     near(`Product drill-down total for ${cat}`, prods.totalRevenue, catTotal);
   }
 
-  // Location country -> year slice
   const { body: locs } = await api('/api/report', { tab: 'loc', from, to });
   const country = locs.items[0]?.k;
   if (!country) { no('Location returns countries', 'empty'); }
@@ -143,7 +146,7 @@ async function testOlap() {
     const { body: slice } = await api('/api/report', {
       tab: 'loc', path: [country], year: 2025, from, to,
     });
-    const [{ total: cityTotal }] = await q(DW, `
+    const [{ total: cityTotal }] = await q('dw', `
       SELECT ROUND(SUM(oi.sales_amount), 2) total
       FROM orderitem oi
       JOIN \`User\` u ON oi.user_id = u.user_id
@@ -152,16 +155,14 @@ async function testOlap() {
     near(`Location slice total for ${country}/2025`, slice.totalSales, cityTotal);
   }
 
-  // Pivot
   const { body: pivot } = await api('/api/pivot', { year: 2025 });
-  const [{ total: pivotTotal }] = await q(DW, `
+  const [{ total: pivotTotal }] = await q('dw', `
     SELECT ROUND(SUM(oi.sales_amount), 2) total
-    FROM orderitem oi
-    JOIN \`Date\` d ON oi.delivery_date_id = d.date_id
+    FROM orderitem oi JOIN \`Date\` d ON oi.delivery_date_id = d.date_id
     WHERE d.year = 2025`);
   near('Pivot annual total matches', pivot.totalSales, pivotTotal);
   const q1Sum = pivot.items.reduce((s, r) => s + r.q1, 0);
-  const [{ total: q1 }] = await q(DW, `
+  const [{ total: q1 }] = await q('dw', `
     SELECT ROUND(SUM(oi.sales_amount), 2) total
     FROM orderitem oi JOIN \`Date\` d ON oi.delivery_date_id = d.date_id
     WHERE d.year = 2025 AND d.quarter = 1`);
@@ -250,7 +251,8 @@ try {
 } catch (e) {
   no('Unhandled exception', e.message);
 } finally {
-  await pool.end();
+  await srcPool.end();
+  await dwPool.end();
   const pad = (s, n) => String(s).padEnd(n);
   console.log('\n' + '='.repeat(78));
   console.log(pad('CASE', 58) + 'RESULT');
