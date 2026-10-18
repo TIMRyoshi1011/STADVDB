@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bar, Doughnut, Line } from 'react-chartjs-2';
 import 'chart.js/auto';
-import { META, MIN, MAX, getKpis, getPivot, getReport } from '../../api.js';
+import { MAX, MIN, getKpis, getMeta, getPivot, getReport } from './api.js';
 import './App.css';
 
 const TABS = [['time', 'Sales Performance'], ['prod', 'Products'], ['loc', 'Customers by Location'], ['log', 'Logistics'], ['pivot', 'Pivot Table']];
@@ -32,18 +32,29 @@ function App() {
   const [sort, setSort] = useState(defSort('time'));
   const [tries, setTries] = useState(0);
   const [res, setRes] = useState({ params: null });
+  const [meta, setMeta] = useState(null);
+  const [metaError, setMetaError] = useState(null);
 
+  useEffect(() => {
+    let on = true;
+    getMeta()
+      .then((result) => on && setMeta(result))
+      .catch((error) => on && setMetaError({ attempt: tries, message: error.message }));
+    return () => { on = false; };
+  }, [tries]);
   const params = useMemo(() => ({ tab, gb, path, pr, pc, A, tries }), [tab, gb, path, pr, pc, A, tries]);
   useEffect(() => {
     let on = true;
     const job = params.tab === 'pivot' ? getPivot(params) : getReport(params);
     Promise.all([job, getKpis(params.A)])
       .then(([data, kpi]) => on && setRes({ params, data, kpi }))
-      .catch(() => on && setRes({ params, error: true }));
+      .catch((error) => on && setRes({ params, error: error.message }));
     return () => { on = false; };
   }, [params]);
-  const loading = res.params !== params;
-  const { data, kpi, error } = res;
+  const metaErrorMessage = metaError?.attempt === tries ? metaError.message : null;
+  const loading = res.params !== params || (!meta && !metaErrorMessage);
+  const { data, kpi } = res;
+  const error = res.error || metaErrorMessage;
   const pivot = tab === 'pivot';
   const empty = !loading && !error && (kpi.orders === 0);
 
@@ -97,12 +108,12 @@ function App() {
         <div className="row">
           <div><label>From</label><input type="date" min={MIN} max={MAX} value={D.from} onChange={(e) => setF('from', e.target.value)} /></div>
           <div><label>To</label><input type="date" min={MIN} max={MAX} value={D.to} onChange={(e) => setF('to', e.target.value)} /></div>
-          <div><label>Country</label><select value={D.country} onChange={(e) => setF('country', e.target.value)}><option value="">All countries</option>{META.countries.map((x) => <option key={x}>{x}</option>)}</select></div>
-          <div><label>Courier</label><select value={D.courier} onChange={(e) => setF('courier', e.target.value)}><option value="">All couriers</option>{META.couriers.map((x) => <option key={x}>{x}</option>)}</select></div>
-          <div><label>Vehicle type</label><select value={D.vehicle} onChange={(e) => setF('vehicle', e.target.value)}><option value="">All vehicle types</option>{META.vehicles.map((x) => <option key={x}>{x}</option>)}</select></div>
+          <div><label>Country</label><select value={D.country} onChange={(e) => setF('country', e.target.value)}><option value="">All countries</option>{(meta?.countries ?? []).map((x) => <option key={x}>{x}</option>)}</select></div>
+          <div><label>Courier</label><select value={D.courier} onChange={(e) => setF('courier', e.target.value)}><option value="">All couriers</option>{(meta?.couriers ?? []).map((x) => <option key={x}>{x}</option>)}</select></div>
+          <div><label>Vehicle type</label><select value={D.vehicle} onChange={(e) => setF('vehicle', e.target.value)}><option value="">All vehicle types</option>{(meta?.vehicles ?? []).map((x) => <option key={x}>{x}</option>)}</select></div>
           <div className="push"><button className="pri" onClick={() => apply(D)}>Apply</button><button onClick={() => apply(DEF())}>Reset</button></div>
         </div>
-        <div className="cats"><span>Categories:</span>{META.cats.map((c) => <button key={c} className={D.cats.includes(c) ? 'on' : ''} onClick={() => toggleCat(c)}>{c}</button>)}</div>
+        <div className="cats"><span>Categories:</span>{(meta?.cats ?? []).map((c) => <button key={c} className={D.cats.includes(c) ? 'on' : ''} onClick={() => toggleCat(c)}>{c}</button>)}</div>
         <div className="chips"><span className="hint">Active filters:</span>{!chips.length && <span className="hint">none – showing everything</span>}
           {chips.map(([t, patch]) => <span className="chip" key={t}>{t}<b title="Remove" onClick={() => apply({ ...A, ...patch })}>×</b></span>)}</div>
       </div>
@@ -118,7 +129,7 @@ function App() {
         {(loading || error || empty) && (
           <div className="state">
             {loading && <><div className="spin" />Loading your numbers…</>}
-            {!loading && error && <><div className="big">⚠️</div>Something went wrong while loading the data.<br /><br /><button className="pri" onClick={() => setTries(tries + 1)}>Try again</button></>}
+            {!loading && error && <><div className="big">⚠️</div>Something went wrong while loading the data: {error}<br /><br /><button className="pri" onClick={() => setTries(tries + 1)}>Try again</button></>}
             {!loading && !error && empty && <><div className="big">🔍</div>No sales match these filters.<br /><br /><button className="pri" onClick={() => apply(DEF())}>Clear all filters</button></>}
           </div>
         )}
@@ -159,7 +170,7 @@ function App() {
       </div>
 
       <div className="foot">
-        <span>ℹ️ Dates are delivery dates. Data covers Sept 24, 2024 – Sept 23, 2025; the first and last months are partial. Sales use each product’s current price. Showing sample data until the backend is connected.</span>
+        <span>ℹ️ Dates are delivery dates. Data covers Sept 24, 2024 – Sept 23, 2025; the first and last months are partial. Sales use each product’s current price. The dashboard uses an in-memory sample dataset served by the local backend.</span>
         {!loading && res.data && <span>Loaded in {(res.data.ms / 1000).toFixed(2)} s</span>}
       </div>
     </div>
