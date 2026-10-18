@@ -29,10 +29,11 @@ export const getMeta = () => request('/api/meta', new URLSearchParams());
 export const getKpis = (filters) =>
   request('/api/kpis', filtersToParams(filters));
 
-export const getReport = ({ tab, gb, path, A }) => {
+export const getReport = ({ tab, gb, path, A, locationYear }) => {
   const params = filtersToParams(A);
   params.set('tab', tab);
   params.set('gb', gb);
+  if (tab === 'loc' && locationYear) params.set('year', locationYear);
   path.forEach((value) => params.append('path', value));
   return request('/api/report', params);
 };

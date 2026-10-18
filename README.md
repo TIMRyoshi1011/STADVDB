@@ -25,7 +25,9 @@ to show quarterly category sales for a selected year. Products requires
 `Product.product_id`, `Product.category`, and `Product.product_name`.
 Customers by Location requires `OrderItem.user_id`,
 `OrderItem.source_order_id`, `OrderItem.sales_amount`, and `User.user_id`,
-`User.country`, and `User.city`. Pivot Table requires `OrderItem.product_id`,
+`User.country`, and `User.city`. The selected country can be sliced by year
+and city using `OrderItem.delivery_date_id`, `OrderItem.quantity`, `Date.date_id`,
+and `Date.year`. Pivot Table requires `OrderItem.product_id`,
 `OrderItem.delivery_date_id`, `OrderItem.sales_amount`, `Product.product_id`,
 `Product.category`, `Date.date_id`, `Date.year`, and `Date.quarter`. Logistics
 continues to use the in-memory sample dataset.
@@ -66,5 +68,6 @@ The backend does not create database indexes automatically.
 - `GET /api/report?tab=time` — MySQL roll-up chart and drill-down data
 - `GET /api/report?tab=prod` — MySQL category/product sales and quantity data
 - `GET /api/report?tab=loc` — MySQL country/city order counts and sales
+- `GET /api/report?tab=loc&path=<country>&year=2025` — MySQL city sales, orders, and quantity for a country/year
 - `GET /api/report` — sample-data chart and drill-down data for Logistics
 - `GET /api/pivot?year=2024` — MySQL quarterly sales by category for the selected year

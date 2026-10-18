@@ -218,6 +218,22 @@ const LOCATION_DRILLDOWN_SQL = `
       u.country,
       total_sales DESC
 `;
+const LOCATION_YEAR_SLICE_SQL = `
+  SELECT
+      u.country,
+      u.city,
+      d.year,
+      COUNT(DISTINCT oi.source_order_id) AS total_orders,
+      SUM(oi.quantity) AS total_quantity,
+      SUM(oi.sales_amount) AS total_sales
+  FROM OrderItem oi
+  JOIN \`User\` u ON oi.user_id = u.user_id
+  JOIN \`Date\` d ON oi.delivery_date_id = d.date_id
+  WHERE u.country = ?
+    AND d.year = ?
+  GROUP BY u.country, u.city, d.year
+  ORDER BY total_sales DESC
+`;
 const QUARTERLY_CATEGORY_PIVOT_SQL = `
   SELECT
       p.category,
@@ -284,6 +300,30 @@ const getLocationRows = (country, city) => {
   locationRowsCache.set(key, entry);
   if (locationRowsCache.size > 20) {
     locationRowsCache.delete(locationRowsCache.keys().next().value);
+  }
+  return entry.promise;
+};
+const locationYearSliceCache = new Map();
+const getLocationYearSliceRows = (country, year) => {
+  const key = JSON.stringify([country, year]);
+  const cached = locationYearSliceCache.get(key);
+  if (cached && (!cached.expiresAt || cached.expiresAt > Date.now())) {
+    return cached.promise;
+  }
+
+  const entry = {};
+  entry.promise = pool.execute(LOCATION_YEAR_SLICE_SQL, [country, year])
+    .then(([rows]) => {
+      entry.expiresAt = Date.now() + 60_000;
+      return rows;
+    })
+    .catch((error) => {
+      locationYearSliceCache.delete(key);
+      throw error;
+    });
+  locationYearSliceCache.set(key, entry);
+  if (locationYearSliceCache.size > 20) {
+    locationYearSliceCache.delete(locationYearSliceCache.keys().next().value);
   }
   return entry.promise;
 };
@@ -469,9 +509,39 @@ const getProductReport = async (path) => {
     totalQuantity: products.reduce((sum, row) => sum + row.quantity, 0),
   };
 };
-const getLocationReport = async (path) => {
+const getLocationReport = async (path, requestedYear) => {
   const country = path[0] ?? null;
   const city = path[1] ?? null;
+  if (country && !city) {
+    const years = await getPivotYears();
+    const defaultYear = years.filter((value) => value <= Number(MAX.slice(0, 4))).at(-1)
+      ?? years.at(-1);
+    const year = requestedYear ?? defaultYear;
+    if (!years.includes(year)) {
+      const error = new Error('Choose a year available in the Date table.');
+      error.status = 400;
+      throw error;
+    }
+    const rows = await getLocationYearSliceRows(country, year);
+    const items = rows.map((row) => ({
+      k: row.city ?? '(Unknown city)',
+      country: row.country,
+      sales: Number(row.total_sales || 0),
+      orders: Number(row.total_orders || 0),
+      quantity: Number(row.total_quantity || 0),
+    }));
+
+    return {
+      items,
+      can: false,
+      level: path.length,
+      year,
+      years,
+      totalSales: items.reduce((sum, row) => sum + row.sales, 0),
+      totalOrders: items.reduce((sum, row) => sum + row.orders, 0),
+      totalQuantity: items.reduce((sum, row) => sum + row.quantity, 0),
+    };
+  }
   const rows = await getLocationRows(country, city);
   const locations = rows.map((row) => ({
     country: row.country ?? '(Unknown country)',
@@ -552,6 +622,8 @@ app.get('/api/report', async (req, res) => {
   const filters = getFilters(req.query);
   const tab = queryString(req.query.tab);
   const path = queryList(req.query.path);
+  const locationYearText = queryString(req.query.year);
+  const locationYear = locationYearText ? Number(locationYearText) : null;
   const groupBy = Number(queryString(req.query.gb, '1'));
 
   if (!validateFilters(filters, res)) return;
@@ -566,15 +638,23 @@ app.get('/api/report', async (req, res) => {
 
   const startedAt = performance.now();
   if (tab === 'loc') {
-    if (path.length > 2) {
+    if (path.length > 1) {
       res.status(400).json({ error: 'The selected location drill-down is too deep.' });
+      return;
+    }
+    if (locationYearText && (!/^\d{4}$/.test(locationYearText) || !Number.isInteger(locationYear))) {
+      res.status(400).json({ error: 'Choose a valid four-digit year.' });
       return;
     }
 
     try {
-      const report = await getLocationReport(path);
+      const report = await getLocationReport(path, locationYear);
       res.json({ ...report, ms: elapsed(startedAt) });
     } catch (error) {
+      if (error.status === 400) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
       console.error('Customer location query failed:', error.message);
       res.status(500).json({ error: 'Failed to load customer locations from the database.' });
     }

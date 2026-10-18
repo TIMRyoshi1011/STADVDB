@@ -27,6 +27,7 @@ function App() {
   const [A, setA] = useState(DEF());   // applied filters
   const [D, setD] = useState(DEF());   // filters being edited (applied with the Apply button)
   const [pivotYear, setPivotYear] = useState('');
+  const [locationYear, setLocationYear] = useState('');
   const [sort, setSort] = useState(defSort('time'));
   const [tries, setTries] = useState(0);
   const [res, setRes] = useState({ params: null });
@@ -40,7 +41,7 @@ function App() {
       .catch((error) => on && setMetaError({ attempt: tries, message: error.message }));
     return () => { on = false; };
   }, [tries]);
-  const params = useMemo(() => ({ tab, gb, path, pivotYear, A, tries }), [tab, gb, path, pivotYear, A, tries]);
+  const params = useMemo(() => ({ tab, gb, path, pivotYear, locationYear, A, tries }), [tab, gb, path, pivotYear, locationYear, A, tries]);
   useEffect(() => {
     let on = true;
     const job = params.tab === 'pivot' ? getPivot(params) : getReport(params);
@@ -117,7 +118,9 @@ function App() {
     <div className="app">
       <div className="card">
         {['prod', 'loc', 'pivot'].includes(tab) ? (
-          <div className="hint">{tab === 'prod' ? 'Choose a category in the chart to see its products and sales.' : tab === 'loc' ? 'Choose a country in the chart to see its cities and customer sales.' : 'Select a year to compare quarterly sales by product category.'}</div>
+          tab === 'loc' && path.length === 1 && data?.years
+            ? <div><label>Year</label><select value={locationYear || data.year} onChange={(e) => setLocationYear(e.target.value)}>{data.years.map((year) => <option key={year} value={year}>{year}</option>)}</select></div>
+            : <div className="hint">{tab === 'prod' ? 'Choose a category in the chart to see its products and sales.' : tab === 'loc' ? 'Choose a country in the chart or table, then select a year to see its cities.' : 'Select a year to compare quarterly sales by product category.'}</div>
         ) : (
           <div className="row">
             <div><label>From</label><input type="date" min={MIN} max={MAX} value={D.from} onChange={(e) => setF('from', e.target.value)} /></div>
@@ -139,7 +142,9 @@ function App() {
           ? (tab === 'pivot'
             ? [['Annual sales', data && php(data.totalSales), ''], ['Product categories', data && data.items.length.toLocaleString('en-PH'), '']]
             : tab === 'loc'
-            ? [['Total sales', data && php(data.totalSales), ''], ['Orders', data && data.totalOrders.toLocaleString('en-PH'), '']]
+            ? (data?.level === 1
+              ? [['Total sales', data && php(data.totalSales), ''], ['Orders', data && data.totalOrders.toLocaleString('en-PH'), ''], ['Quantity sold', data && data.totalQuantity.toLocaleString('en-PH'), '']]
+              : [['Total sales', data && php(data.totalSales), ''], ['Orders', data && data.totalOrders.toLocaleString('en-PH'), '']])
             : [[tab === 'prod' ? 'Total sales' : 'Total revenue', data && php(data.totalRevenue), ''], ['Units sold', data && data.totalQuantity.toLocaleString('en-PH'), '']])
           : [['Total sales', kpi && php(kpi.sales), ''], ['Orders', kpi && kpi.orders.toLocaleString('en-PH'), ''], ['Items per order', kpi && (kpi.orders ? kpi.perOrder.toFixed(1) : '–'), ''], ['Top courier', kpi && (kpi.top ? kpi.top[0] : '–'), kpi && kpi.top ? php(kpi.top[1]) : '']]).map(([a, b, e]) => (
           <div className="kpi" key={a}><small>{a}</small><div>{b ?? '…'}</div><em>{e || '\u00a0'}</em></div>))}
@@ -170,9 +175,9 @@ function App() {
                   {type === 'line' && <span className="hint"><b className="up">●</b> up from the previous period <b className="down">●</b> down</span>}
                 </div>
                 <div className="ch">{type === 'line' ? <Line data={cdata} options={options} /> : type === 'doughnut' ? <Doughnut data={cdata} options={options} /> : <Bar data={cdata} options={options} />}</div>
-                <div className="sc"><table><thead><tr>{(['time', 'prod'].includes(tab) ? [[ 'k', tab === 'prod' && path.length === 0 ? 'Category' : 'Product / Period'], ['sales', tab === 'prod' ? 'Sales' : 'Revenue'], ['quantity', 'Quantity']] : [['k', tab === 'loc' && path.length === 0 ? 'Country' : tab === 'loc' ? 'City' : 'Item'], ['sales', 'Sales'], ['orders', 'Orders']]).map(([k, n]) => <th key={k} onClick={() => sortBy(k)}>{n}{sort.k === k ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>)}</tr></thead>
-                  <tbody>{rows.map((r) => <tr key={r.k}><td>{lab(r.k)}</td><td>{php(r.sales)}</td><td>{(['time', 'prod'].includes(tab) ? r.quantity : r.orders).toLocaleString('en-PH')}</td></tr>)}</tbody></table></div>
-                <button onClick={() => download(tab + '.csv', ['time', 'prod'].includes(tab) ? [tab === 'prod' && path.length === 0 ? 'Category' : 'Product / Period', tab === 'prod' ? 'Sales (Php)' : 'Revenue (Php)', 'Quantity'] : [tab === 'loc' && path.length === 0 ? 'Country' : tab === 'loc' ? 'City' : 'Item', 'Sales (Php)', 'Orders'], csvRows)}>Export CSV</button>
+                <div className="sc"><table><thead><tr>{(['time', 'prod'].includes(tab) ? [[ 'k', tab === 'prod' && path.length === 0 ? 'Category' : 'Product / Period'], ['sales', tab === 'prod' ? 'Sales' : 'Revenue'], ['quantity', 'Quantity']] : [['k', tab === 'loc' && path.length === 0 ? 'Country' : tab === 'loc' ? 'City' : 'Item'], ['sales', 'Sales'], ...(tab === 'loc' && path.length === 1 ? [['quantity', 'Quantity']] : []), ['orders', 'Orders']]).map(([k, n]) => <th key={k} onClick={() => sortBy(k)}>{n}{sort.k === k ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>)}</tr></thead>
+                  <tbody>{rows.map((r) => <tr key={r.k} onClick={() => { if (tab === 'loc' && data.can) { setPath([...path, r.k]); setSort(defSort(tab)); } }} style={tab === 'loc' && data.can ? { cursor: 'pointer' } : undefined}><td>{lab(r.k)}</td><td>{php(r.sales)}</td>{tab === 'loc' && path.length === 1 && <td>{r.quantity.toLocaleString('en-PH')}</td>}<td>{(['time', 'prod'].includes(tab) ? r.quantity : r.orders).toLocaleString('en-PH')}</td></tr>)}</tbody></table></div>
+                <button onClick={() => download(tab + '.csv', ['time', 'prod'].includes(tab) ? [tab === 'prod' && path.length === 0 ? 'Category' : 'Product / Period', tab === 'prod' ? 'Sales (Php)' : 'Revenue (Php)', 'Quantity'] : [tab === 'loc' && path.length === 0 ? 'Country' : tab === 'loc' ? 'City' : 'Item', 'Sales (Php)', ...(tab === 'loc' && path.length === 1 ? ['Quantity'] : []), 'Orders'], tab === 'loc' && path.length === 1 ? rows.map((r) => [lab(r.k), Math.round(r.sales), r.quantity, r.orders]) : csvRows)}>Export CSV</button>
               </>
             )}
             {pivot && (
@@ -191,7 +196,7 @@ function App() {
       </div>
 
       <div className="foot">
-        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL distinct order counts and sales, drilled down from country to city.' : tab === 'pivot' ? 'Pivot Table uses MySQL quarterly sales totals by product category for the selected year.' : 'This report uses the backend’s in-memory sample dataset.'}</span>
+        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL sales and distinct orders; select a country and year to view city quantity totals.' : tab === 'pivot' ? 'Pivot Table uses MySQL quarterly sales totals by product category for the selected year.' : 'This report uses the backend’s in-memory sample dataset.'}</span>
         {!loading && res.data && <span>Loaded in {(res.data.ms / 1000).toFixed(2)} s</span>}
       </div>
     </div>
