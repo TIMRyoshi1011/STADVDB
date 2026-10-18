@@ -1,4 +1,16 @@
 import express from 'express';
+import mysql from "mysql2/promise";
+
+const pool = mysql.createPool({
+    host: "localhost",
+    user: "root",
+    password: "TheMarcHunter#1011",         // change to mysql password
+    database: "ecomm_dw",
+    port: 3306,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+});
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -154,6 +166,23 @@ const groupRows = (filteredRows, keyFor) => {
   }));
 };
 const elapsed = (startedAt) => Math.round(performance.now() - startedAt);
+
+app.get("/api/conn", async (req, res) => {
+    try {
+        const [rows] = await pool.query("SELECT 1 AS connected");
+
+        res.json({
+            message: "MySQL connected successfully!",
+            result: rows[0],
+        });
+    } catch (error) {
+        console.error("MySQL connection error:", error.message);
+
+        res.status(500).json({
+            error: "Database connection failed",
+        });
+    }
+});
 
 app.get('/api/meta', (_req, res) => {
   res.json({ ...META, min: MIN, max: MAX });
