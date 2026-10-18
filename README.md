@@ -4,8 +4,11 @@
 
 Instructions
 
-Install dependencies: npm install chart.js react-chartjs-2 concurrently
-Run: npm run dev
+- Install dependencies (on client folder): `npm i chart.js react-chartjs-2`
+- Go back to main: `cd ..`
+- Install dependencies again (on main folder): `npm i concurrently`
+- Run: `npm run dev`
+- Open `http://localhost:3000/api/dashboard` and `http://localhost:5173/` in browser
 
 The Vite development server proxies `/api` requests to Express at
 `http://localhost:3000`. The dashboard loads its summary and chart data from
