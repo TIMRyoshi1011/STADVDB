@@ -168,6 +168,198 @@ const groupRows = (filteredRows, keyFor) => {
   }));
 };
 const elapsed = (startedAt) => Math.round(performance.now() - startedAt);
+const SALES_PERFORMANCE_SQL = `
+  SELECT
+      d.year,
+      d.quarter,
+      d.month,
+      d.month_name,
+      d.full_date,
+      SUM(oi.sales_amount) AS total_revenue,
+      SUM(oi.quantity) AS total_quantity
+  FROM OrderItem oi
+  JOIN \`Date\` d ON oi.delivery_date_id = d.date_id
+  WHERE d.full_date BETWEEN ? AND ?
+  GROUP BY
+      d.year,
+      d.quarter,
+      d.month,
+      d.month_name,
+      d.full_date
+  WITH ROLLUP
+`;
+const PRODUCT_DRILLDOWN_SQL = `
+  SELECT
+      p.category,
+      p.product_name,
+      SUM(oi.quantity) AS quantity_sold,
+      SUM(oi.sales_amount) AS total_sales
+  FROM OrderItem oi
+  JOIN Product p ON oi.product_id = p.product_id
+  WHERE
+      (? IS NULL OR p.category = ?)
+      AND
+      (? IS NULL OR p.product_name = ?)
+  GROUP BY
+      p.category,
+      p.product_id,
+      p.product_name
+  ORDER BY
+      p.category,
+      total_sales DESC
+`;
+const productRowsCache = new Map();
+const getProductRows = (category, product) => {
+  const key = JSON.stringify([category, product]);
+  const cached = productRowsCache.get(key);
+  if (cached && (!cached.expiresAt || cached.expiresAt > Date.now())) {
+    return cached.promise;
+  }
+
+  const entry = {};
+  entry.promise = pool.execute(PRODUCT_DRILLDOWN_SQL, [
+    category, category, product, product,
+  ])
+    .then(([rows]) => {
+      entry.expiresAt = Date.now() + 60_000;
+      return rows;
+    })
+    .catch((error) => {
+      productRowsCache.delete(key);
+      throw error;
+    });
+  productRowsCache.set(key, entry);
+  if (productRowsCache.size > 20) {
+    productRowsCache.delete(productRowsCache.keys().next().value);
+  }
+  return entry.promise;
+};
+const salesRollupCache = new Map();
+const getSalesRollup = (filters) => {
+  const key = `${filters.from}:${filters.to}`;
+  const cached = salesRollupCache.get(key);
+  if (cached && (!cached.expiresAt || cached.expiresAt > Date.now())) {
+    return cached.promise;
+  }
+
+  const entry = {};
+  entry.promise = pool.execute(SALES_PERFORMANCE_SQL, [filters.from, filters.to])
+    .then(([rows]) => {
+      entry.expiresAt = Date.now() + 60_000;
+      return rows;
+    })
+    .catch((error) => {
+      salesRollupCache.delete(key);
+      throw error;
+    });
+  salesRollupCache.set(key, entry);
+  if (salesRollupCache.size > 5) {
+    salesRollupCache.delete(salesRollupCache.keys().next().value);
+  }
+  return entry.promise;
+};
+const rollupTimeKey = (row, level) => {
+  if (level === 0 && row.year != null) return String(row.year);
+  if (level === 1 && row.year != null && row.quarter != null) {
+    const quarter = String(row.quarter).replace(/^Q/i, '');
+    return `${row.year} Q${quarter}`;
+  }
+  if (level === 2 && row.year != null && row.month != null) {
+    return `${row.year}-${String(row.month).padStart(2, '0')}`;
+  }
+  if (level === 3 && row.full_date != null) {
+    return row.full_date instanceof Date
+      ? row.full_date.toISOString().slice(0, 10)
+      : String(row.full_date).slice(0, 10);
+  }
+  return null;
+};
+const rollupRowsForLevel = (rows, level) => rows.filter((row) => (
+  level === 0
+    ? row.year != null && row.quarter == null
+    : level === 1
+      ? row.year != null && row.quarter != null && row.month == null
+      : level === 2
+        ? row.year != null && row.month != null && row.full_date == null
+        : row.full_date != null
+));
+const getSalesPerformance = async (filters, groupBy, path) => {
+  const rollup = await getSalesRollup(filters);
+  const level = groupBy + path.length;
+  const matchesPath = (row) => path.every(
+    (value, index) => rollupTimeKey(row, groupBy + index) === value,
+  );
+  const items = rollupRowsForLevel(rollup, level)
+    .filter(matchesPath)
+    .map((row) => ({
+      k: rollupTimeKey(row, level),
+      sales: Number(row.total_revenue || 0),
+      quantity: Number(row.total_quantity || 0),
+    }));
+  const total = rollup.find((row) => row.year == null);
+
+  return {
+    items,
+    can: level < 3,
+    level: path.length,
+    totalRevenue: Number(total?.total_revenue || 0),
+    totalQuantity: Number(total?.total_quantity || 0),
+  };
+};
+const getProductReport = async (path) => {
+  if (path.length === 0) {
+    const [categories] = await pool.query(
+      'SELECT DISTINCT category FROM Product WHERE category IS NOT NULL ORDER BY category',
+    );
+    const categoryReports = await Promise.all(categories.map(({ category }) => (
+      getProductReport([category])
+    )));
+    const items = categoryReports.map((report, index) => ({
+      k: categories[index].category,
+      sales: report.totalRevenue,
+      quantity: report.totalQuantity,
+    }));
+
+    return {
+      items,
+      can: true,
+      level: 0,
+      totalRevenue: items.reduce((sum, row) => sum + row.sales, 0),
+      totalQuantity: items.reduce((sum, row) => sum + row.quantity, 0),
+    };
+  }
+
+  const category = path[0] ?? null;
+  const product = path[1] ?? null;
+  const rows = await getProductRows(category, product);
+  const products = rows.map((row) => ({
+    category: row.category,
+    product: row.product_name,
+    sales: Number(row.total_sales || 0),
+    quantity: Number(row.quantity_sold || 0),
+  }));
+  const visibleRows = path.length === 0
+    ? [...products.reduce((groups, row) => {
+      const group = groups.get(row.category) || {
+        k: row.category,
+        sales: 0,
+        quantity: 0,
+      };
+      group.sales += row.sales;
+      group.quantity += row.quantity;
+      groups.set(row.category, group);
+      return groups;
+    }, new Map()).values()]
+    : products.map((row) => ({ ...row, k: row.product }));
+
+  return {
+    items: visibleRows,
+    can: path.length < 2,
+    level: path.length,
+    totalRevenue: products.reduce((sum, row) => sum + row.sales, 0),
+    totalQuantity: products.reduce((sum, row) => sum + row.quantity, 0),
+  };
+};
 
 app.get("/api/conn", async (req, res) => {
     try {
@@ -212,7 +404,7 @@ app.get('/api/kpis', (req, res) => {
   });
 });
 
-app.get('/api/report', (req, res) => {
+app.get('/api/report', async (req, res) => {
   const filters = getFilters(req.query);
   const tab = queryString(req.query.tab);
   const path = queryList(req.query.path);
@@ -229,9 +421,21 @@ app.get('/api/report', (req, res) => {
   }
 
   const startedAt = performance.now();
-  let filteredRows = filterRows(filters);
-  let keyFor;
-  let canDrill;
+  if (tab === 'prod') {
+    if (path.length > 2) {
+      res.status(400).json({ error: 'The selected product drill-down is too deep.' });
+      return;
+    }
+
+    try {
+      const report = await getProductReport(path);
+      res.json({ ...report, ms: elapsed(startedAt) });
+    } catch (error) {
+      console.error('Product drill-down query failed:', error.message);
+      res.status(500).json({ error: 'Failed to load product sales from the database.' });
+    }
+    return;
+  }
 
   if (tab === 'time') {
     const level = groupBy + path.length;
@@ -239,25 +443,31 @@ app.get('/api/report', (req, res) => {
       res.status(400).json({ error: 'The selected time drill-down is too deep.' });
       return;
     }
-    path.forEach((value, index) => {
-      filteredRows = filteredRows.filter(
-        (row) => timeKey(row.d, groupBy + index) === value,
-      );
-    });
-    keyFor = (row) => timeKey(row.d, level);
-    canDrill = level < 3;
-  } else {
-    const dimensions = DIMS[tab];
-    if (path.length >= dimensions.length) {
-      res.status(400).json({ error: 'The selected report drill-down is too deep.' });
-      return;
+
+    try {
+      const report = await getSalesPerformance(filters, groupBy, path);
+      res.json({ ...report, ms: elapsed(startedAt) });
+    } catch (error) {
+      console.error('Sales performance query failed:', error.message);
+      res.status(500).json({ error: 'Failed to load sales performance from the database.' });
     }
-    path.forEach((value, index) => {
-      filteredRows = filteredRows.filter((row) => row[dimensions[index]] === value);
-    });
-    keyFor = (row) => row[dimensions[path.length]];
-    canDrill = path.length < dimensions.length - 1;
+    return;
   }
+
+  let filteredRows = filterRows(filters);
+  let keyFor;
+  let canDrill;
+
+  const dimensions = DIMS[tab];
+  if (path.length >= dimensions.length) {
+    res.status(400).json({ error: 'The selected report drill-down is too deep.' });
+    return;
+  }
+  path.forEach((value, index) => {
+    filteredRows = filteredRows.filter((row) => row[dimensions[index]] === value);
+  });
+  keyFor = (row) => row[dimensions[path.length]];
+  canDrill = path.length < dimensions.length - 1;
 
   res.json({
     items: groupRows(filteredRows, keyFor),
