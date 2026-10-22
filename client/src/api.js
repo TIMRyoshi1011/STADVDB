@@ -1,6 +1,8 @@
 export const MIN = '2024-09-24';
 export const MAX = '2025-09-23';
 
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+
 const filtersToParams = (filters) => {
   const params = new URLSearchParams({
     from: filters.from,
@@ -14,7 +16,19 @@ const filtersToParams = (filters) => {
 };
 
 const request = async (path, params) => {
-  const response = await fetch(`${path}?${params}`);
+  if (!import.meta.env.DEV && !API_BASE_URL) {
+    throw new Error('VITE_API_URL is not configured for this deployment.');
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}?${params}`);
+  const contentType = response.headers.get('content-type') || '';
+
+  if (!contentType.includes('application/json')) {
+    throw new Error(
+      `Expected JSON from the API but received ${contentType || 'a non-JSON response'} (HTTP ${response.status}). Check that VITE_API_URL points to the backend.`,
+    );
+  }
+
   const body = await response.json();
 
   if (!response.ok) {
