@@ -4,6 +4,13 @@ import 'chart.js/auto';
 import { MAX, MIN, getKpis, getMeta, getPivot, getReport } from './api.js';
 import './App.css';
 
+const API_URL = import.meta.env.VITE_API_URL;
+
+fetch(`${API_URL}/api/conn`)
+  .then(response => response.json())
+  .then(data => console.log(data))
+  .catch(error => console.error("API request failed:", error));
+
 const TABS = [['time', 'Sales Performance'], ['prod', 'Products'], ['loc', 'Customers by Location'], ['log', 'Logistics'], ['pivot', 'Pivot Table']];
 const TITLE = { time: 'How are sales changing over time?', prod: 'Which products sell best?', loc: 'Where are our customers?', log: 'How are deliveries performing?', pivot: 'Quarterly sales by product category' };
 const ROOT = { time: 'All time', prod: 'All categories', loc: 'All countries', log: 'All couriers' };

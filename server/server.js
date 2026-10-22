@@ -15,6 +15,10 @@ const app = express();
 app.use(cors()); // Allow requests from your frontend
 app.use(express.json());
 
+app.use(cors({
+  origin: "https://stadvdb.pages.dev/"
+}));
+
 const PORT = process.env.PORT;
 const MIN = '2024-09-24';
 const MAX = '2025-09-23';
