@@ -60,7 +60,7 @@ function App() {
   const pivot = tab === 'pivot';
   const empty = !loading && !error && (tab === 'pivot'
     ? !data?.years?.length
-    : ['time', 'prod', 'loc'].includes(tab) ? !data?.items?.length : kpi.orders === 0);
+    : ['time', 'prod', 'loc'].includes(tab) ? !data?.items?.length : (kpi?.orders ?? 0) === 0);
 
   const setTabTo = (t) => {
     setTab(t);
@@ -196,7 +196,7 @@ function App() {
       </div>
 
       <div className="foot">
-        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL sales and distinct orders; select a country and year to view city quantity totals.' : tab === 'pivot' ? 'Pivot Table uses MySQL quarterly sales totals by product category for the selected year.' : 'This report uses the backend’s in-memory sample dataset.'}</span>
+        <span>ℹ️ {tab === 'time' ? 'Sales Performance uses the MySQL sales_amount and quantity roll-up for delivery dates Sept 24, 2024 – Sept 23, 2025.' : tab === 'prod' ? 'Products uses MySQL quantity and sales totals, drilled down from category to product.' : tab === 'loc' ? 'Customers by Location uses MySQL sales and distinct orders; select a country and year to view city quantity totals.' : tab === 'pivot' ? 'Pivot Table uses MySQL quarterly sales totals by product category for the selected year.' : 'Logistics uses MySQL sales and distinct orders, drilled down from courier to rider.'}</span>
         {!loading && res.data && <span>Loaded in {(res.data.ms / 1000).toFixed(2)} s</span>}
       </div>
     </div>
