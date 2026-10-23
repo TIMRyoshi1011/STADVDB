@@ -6,108 +6,23 @@ import 'dotenv/config';
 const pool = mysql.createPool({
     host: process.env.HOST,
     user: process.env.USER,
-    password: process.env.PASSWORD,         // change to mysql password
+    password: process.env.PASSWORD,
     database: process.env.DB,
     port: process.env.DB_PORT
 });
 
 const app = express();
-app.use(cors()); // Allow requests from your frontend
+app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT;
 const MIN = '2024-09-24';
 const MAX = '2025-09-23';
-const CATS = {
-  Toys: ['Toy robot:350', 'Building blocks:890', 'Plush bear:520'],
-  Bags: ['Backpack:1450', 'Tote bag:780', 'Sling bag:990'],
-  Makeup: ['Lipstick:420', 'Foundation:850', 'Eyeshadow kit:1100'],
-  Gadgets: ['Smart watch:2900', 'Earbuds:1500', 'Power bank:900'],
-  Clothes: ['T-shirt:350', 'Dress:1200', 'Jacket:2100'],
-  "Men's Apparel": ['Polo shirt:650', 'Chinos:1100', 'Denim jeans:1500'],
-  Electronics: ['Bluetooth speaker:1800', 'Monitor:6500', 'Keyboard:1300'],
-  Appliances: ['Air fryer:3200', 'Rice cooker:1900', 'Electric fan:1400'],
-  Laptops: ['Laptop 14in:32000', 'Laptop 16in:45000', 'Gaming laptop:62000'],
-};
-const COUNTRIES = [
-  'Sudan', 'Dominican Republic', 'Reunion', 'Slovenia',
-  'United States of America', 'Equatorial Guinea', 'Antarctica',
-  'North Macedonia', 'Slovakia', 'Luxembourg', 'Kyrgyz Republic',
-  'Cook Islands',
-];
-const COURIERS = {
-  JNT: ['JNT Rider 1', 'JNT Rider 2', 'JNT Rider 3', 'JNT Rider 4'],
-  FEDEZ: ['FEDEZ Rider 1', 'FEDEZ Rider 2', 'FEDEZ Rider 3', 'FEDEZ Rider 4'],
-  LBCD: ['LBCD Rider 1', 'LBCD Rider 2', 'LBCD Rider 3', 'LBCD Rider 4'],
-};
-const VEHICLES = ['Motorcycle', 'Bicycle', 'Car', 'Tricycle'];
-const META = {
-  cats: Object.keys(CATS),
-  countries: COUNTRIES.slice().sort(),
-  couriers: Object.keys(COURIERS),
-  vehicles: VEHICLES,
-};
 const DIMS = {
   prod: ['cat', 'prod'],
   loc: ['country', 'city'],
-  log: ['courier', 'rider'],
 };
 
-let seed = 7;
-const rnd = () => {
-  seed |= 0;
-  seed = (seed + 0x6D2B79F5) | 0;
-  let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-  value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-  return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-};
-const pick = (values) => values[Math.floor(rnd() * values.length)];
-const startDate = Date.UTC(2024, 8, 24);
-const rows = [];
-
-for (let orderId = 1; orderId <= 2500; orderId++) {
-  const courier = pick(Object.keys(COURIERS));
-  const rider = pick(COURIERS[courier]);
-  const country = COUNTRIES[Math.floor(Math.pow(rnd(), 1.6) * COUNTRIES.length)];
-  const city = `City ${1 + Math.floor(rnd() * 4)}`;
-  const vehicle = VEHICLES[(rider.length + rider.charCodeAt(rider.length - 1)) % VEHICLES.length];
-  const date = new Date(startDate + Math.floor(365 * rnd()) * 864e5)
-    .toISOString().slice(0, 10);
-  const orderItems = new Set();
-
-  for (let i = 0, count = 1 + Math.floor(rnd() * 3); i < count; i++) {
-    orderItems.add(`${pick(Object.keys(CATS))}|${Math.floor(rnd() * 3)}`);
-  }
-
-  orderItems.forEach((item) => {
-    const [category, index] = item.split('|');
-    const [product, price] = CATS[category][Number(index)].split(':');
-    const units = 1 + Math.floor(rnd() * 10);
-    rows.push({
-      oid: orderId,
-      d: date,
-      cat: category,
-      prod: product,
-      country,
-      city,
-      courier,
-      rider,
-      vehicle,
-      units,
-      sales: units * Number(price),
-    });
-  });
-}
-
-const timeKey = (date, level) => (
-  level === 0
-    ? date.slice(0, 4)
-    : level === 1
-      ? `${date.slice(0, 4)} Q${Math.ceil(Number(date.slice(5, 7)) / 3)}`
-      : level === 2
-        ? date.slice(0, 7)
-        : date
-);
 const queryString = (value, fallback = '') => (
   typeof value === 'string' ? value : fallback
 );
@@ -135,30 +50,8 @@ const validateFilters = (filters, res) => {
   }
   return true;
 };
-const filterRows = (filters) => rows.filter((row) => (
-  row.d >= filters.from
-  && row.d <= filters.to
-  && (!filters.cats.length || filters.cats.includes(row.cat))
-  && (!filters.country || row.country === filters.country)
-  && (!filters.courier || row.courier === filters.courier)
-  && (!filters.vehicle || row.vehicle === filters.vehicle)
-));
-const groupRows = (filteredRows, keyFor) => {
-  const groups = new Map();
-  filteredRows.forEach((row) => {
-    const key = keyFor(row);
-    const group = groups.get(key) || { k: key, sales: 0, ids: new Set() };
-    group.sales += row.sales;
-    group.ids.add(row.oid);
-    groups.set(key, group);
-  });
-  return [...groups.values()].map(({ k, sales, ids }) => ({
-    k,
-    sales,
-    orders: ids.size,
-  }));
-};
 const elapsed = (startedAt) => Math.round(performance.now() - startedAt);
+
 const SALES_PERFORMANCE_SQL = `
   SELECT
       d.year,
@@ -251,6 +144,28 @@ const QUARTERLY_CATEGORY_PIVOT_SQL = `
   GROUP BY p.category
   ORDER BY annual_sales DESC
 `;
+const LOGISTICS_DRILLDOWN_SQL = `
+  SELECT
+      r.courier_name,
+      r.rider_name,
+      r.vehicle_type,
+      COUNT(DISTINCT oi.source_order_id) AS total_orders,
+      SUM(oi.sales_amount)               AS total_sales
+  FROM OrderItem oi
+  JOIN Rider r ON oi.rider_id = r.rider_id
+  JOIN \`Date\`  d ON oi.delivery_date_id = d.date_id
+  JOIN Product p ON oi.product_id = p.product_id
+  JOIN \`User\`  u ON oi.user_id = u.user_id
+  WHERE d.full_date BETWEEN ? AND ?
+    AND (? IS NULL OR p.category     = ?)
+    AND (? IS NULL OR u.country      = ?)
+    AND (? IS NULL OR r.courier_name = ?)
+    AND (? IS NULL OR r.vehicle_type = ?)
+    AND (? IS NULL OR r.rider_name   = ?)
+  GROUP BY r.courier_name, r.rider_name, r.vehicle_type
+  ORDER BY r.courier_name, total_sales DESC
+`;
+
 const productRowsCache = new Map();
 const getProductRows = (category, product) => {
   const key = JSON.stringify([category, product]);
@@ -460,9 +375,10 @@ const getProductReport = async (path) => {
     const [categories] = await pool.query(
       'SELECT DISTINCT category FROM Product WHERE category IS NOT NULL ORDER BY category',
     );
-    const categoryReports = await Promise.all(categories.map(({ category }) => (
-      getProductReport([category])
-    )));
+    const categoryReports = [];
+    for (const { category } of categories) {
+      categoryReports.push(await getProductReport([category]));
+    }
     const items = categoryReports.map((report, index) => ({
       k: categories[index].category,
       sales: report.totalRevenue,
@@ -487,19 +403,7 @@ const getProductReport = async (path) => {
     sales: Number(row.total_sales || 0),
     quantity: Number(row.quantity_sold || 0),
   }));
-  const visibleRows = path.length === 0
-    ? [...products.reduce((groups, row) => {
-      const group = groups.get(row.category) || {
-        k: row.category,
-        sales: 0,
-        quantity: 0,
-      };
-      group.sales += row.sales;
-      group.quantity += row.quantity;
-      groups.set(row.category, group);
-      return groups;
-    }, new Map()).values()]
-    : products.map((row) => ({ ...row, k: row.product }));
+  const visibleRows = products.map((row) => ({ ...row, k: row.product }));
 
   return {
     items: visibleRows,
@@ -592,30 +496,77 @@ app.get("/api/conn", async (req, res) => {
     }
 });
 
-app.get('/api/meta', (_req, res) => {
-  res.json({ ...META, min: MIN, max: MAX });
+app.get('/api/meta', async (_req, res) => {
+  try {
+    const [cats]      = await pool.query('SELECT DISTINCT category     FROM Product WHERE category     IS NOT NULL ORDER BY category');
+    const [countries] = await pool.query('SELECT DISTINCT country      FROM `User`  WHERE country      IS NOT NULL ORDER BY country');
+    const [couriers]  = await pool.query('SELECT DISTINCT courier_name FROM Rider   WHERE courier_name IS NOT NULL ORDER BY courier_name');
+    const [vehicles]  = await pool.query('SELECT DISTINCT vehicle_type FROM Rider   WHERE vehicle_type IS NOT NULL ORDER BY vehicle_type');
+    res.json({
+      cats:      cats.map((r) => r.category),
+      countries: countries.map((r) => r.country),
+      couriers:  couriers.map((r) => r.courier_name),
+      vehicles:  vehicles.map((r) => r.vehicle_type),
+      min: MIN,
+      max: MAX,
+    });
+  } catch (error) {
+    console.error('Meta query failed:', error.message);
+    res.status(500).json({ error: 'Failed to load filter metadata.' });
+  }
 });
 
-app.get('/api/kpis', (req, res) => {
+app.get('/api/kpis', async (req, res) => {
   const filters = getFilters(req.query);
   if (!validateFilters(filters, res)) return;
 
   const startedAt = performance.now();
-  const filteredRows = filterRows(filters);
-  const orderIds = new Set(filteredRows.map((row) => row.oid));
-  const courierSales = {};
-  filteredRows.forEach((row) => {
-    courierSales[row.courier] = (courierSales[row.courier] || 0) + row.sales;
-  });
-  const top = Object.entries(courierSales).sort((a, b) => b[1] - a[1])[0] || null;
+  try {
+    const [bounds] = await pool.query(
+      'SELECT MIN(date_id) AS lo, MAX(date_id) AS hi FROM `Date` WHERE full_date BETWEEN ? AND ?',
+      [filters.from, filters.to],
+    );
+    if (!bounds[0] || bounds[0].lo == null) {
+      res.json({ sales: 0, orders: 0, perOrder: 0, top: null, ms: elapsed(startedAt) });
+      return;
+    }
+    const lo = bounds[0].lo;
+    const hi = bounds[0].hi;
 
-  res.json({
-    sales: filteredRows.reduce((sum, row) => sum + row.sales, 0),
-    orders: orderIds.size,
-    perOrder: orderIds.size ? filteredRows.length / orderIds.size : 0,
-    top,
-    ms: elapsed(startedAt),
-  });
+    const [[totals]] = await pool.query(
+      `SELECT SUM(oi.sales_amount) sales,
+              COUNT(*)              items,
+              COUNT(DISTINCT oi.source_order_id) orders
+       FROM OrderItem oi
+       WHERE oi.delivery_date_id BETWEEN ? AND ?`,
+      [lo, hi],
+    );
+
+    const [courierTotals] = await pool.query(
+      `SELECT r.courier_name, SUM(oi.sales_amount) sales
+       FROM OrderItem oi JOIN Rider r ON oi.rider_id = r.rider_id
+       WHERE oi.delivery_date_id BETWEEN ? AND ?
+       GROUP BY r.courier_name
+       ORDER BY sales DESC
+       LIMIT 1`,
+      [lo, hi],
+    );
+
+    const top = courierTotals[0]
+      ? [courierTotals[0].courier_name, Number(courierTotals[0].sales)]
+      : null;
+
+    res.json({
+      sales:    Number(totals.sales || 0),
+      orders:   Number(totals.orders || 0),
+      perOrder: totals.orders ? Number(totals.items) / Number(totals.orders) : 0,
+      top,
+      ms:       elapsed(startedAt),
+    });
+  } catch (error) {
+    console.error('KPI query failed:', error.message);
+    res.status(500).json({ error: 'Failed to load KPI summary.' });
+  }
 });
 
 app.get('/api/report', async (req, res) => {
@@ -627,7 +578,7 @@ app.get('/api/report', async (req, res) => {
   const groupBy = Number(queryString(req.query.gb, '1'));
 
   if (!validateFilters(filters, res)) return;
-  if (!['time', ...Object.keys(DIMS)].includes(tab)) {
+  if (!['time', 'prod', 'loc', 'log'].includes(tab)) {
     res.status(400).json({ error: 'Choose a valid report tab.' });
     return;
   }
@@ -637,6 +588,7 @@ app.get('/api/report', async (req, res) => {
   }
 
   const startedAt = performance.now();
+
   if (tab === 'loc') {
     if (path.length > 1) {
       res.status(400).json({ error: 'The selected location drill-down is too deep.' });
@@ -694,27 +646,71 @@ app.get('/api/report', async (req, res) => {
     return;
   }
 
-  let filteredRows = filterRows(filters);
-  let keyFor;
-  let canDrill;
+  if (tab === 'log') {
+    if (path.length > 1) {
+      res.status(400).json({ error: 'The selected logistics drill-down is too deep.' });
+      return;
+    }
+    const courier = path[0] ?? null;
+    const rider   = path[1] ?? null;
 
-  const dimensions = DIMS[tab];
-  if (path.length >= dimensions.length) {
-    res.status(400).json({ error: 'The selected report drill-down is too deep.' });
+    try {
+      const [rows] = await pool.execute(LOGISTICS_DRILLDOWN_SQL, [
+        filters.from, filters.to,
+        filters.cats.length === 1 ? filters.cats[0] : null,
+        filters.cats.length === 1 ? filters.cats[0] : null,
+        filters.country || null, filters.country || null,
+        filters.courier || null, filters.courier || null,
+        filters.vehicle || null, filters.vehicle || null,
+        rider, rider,
+      ]);
+
+      const data = rows.map((row) => ({
+        courier: row.courier_name,
+        rider:   row.rider_name,
+        vehicle: row.vehicle_type,
+        sales:   Number(row.total_sales || 0),
+        orders:  Number(row.total_orders || 0),
+      }));
+
+      if (path.length === 0) {
+        const groups = new Map();
+        data.forEach((row) => {
+          const g = groups.get(row.courier) || { k: row.courier, sales: 0, orders: 0 };
+          g.sales  += row.sales;
+          g.orders += row.orders;
+          groups.set(row.courier, g);
+        });
+        const items = [...groups.values()];
+        res.json({
+          items,
+          can: true,
+          level: 0,
+          totalRevenue: items.reduce((s, r) => s + r.sales, 0),
+          totalOrders:  items.reduce((s, r) => s + r.orders, 0),
+          ms: elapsed(startedAt),
+        });
+        return;
+      }
+
+      const items = data
+        .filter((row) => row.courier === courier)
+        .map((row) => ({ k: row.rider, sales: row.sales, orders: row.orders }));
+
+      res.json({
+        items,
+        can: false,
+        level: 1,
+        totalRevenue: items.reduce((s, r) => s + r.sales, 0),
+        totalOrders:  items.reduce((s, r) => s + r.orders, 0),
+        ms: elapsed(startedAt),
+      });
+    } catch (error) {
+      console.error('Logistics query failed:', error.message);
+      res.status(500).json({ error: 'Failed to load logistics data from the database.' });
+    }
     return;
   }
-  path.forEach((value, index) => {
-    filteredRows = filteredRows.filter((row) => row[dimensions[index]] === value);
-  });
-  keyFor = (row) => row[dimensions[path.length]];
-  canDrill = path.length < dimensions.length - 1;
-
-  res.json({
-    items: groupRows(filteredRows, keyFor),
-    can: canDrill,
-    level: path.length,
-    ms: elapsed(startedAt),
-  });
 });
 
 app.get('/api/pivot', async (req, res) => {
